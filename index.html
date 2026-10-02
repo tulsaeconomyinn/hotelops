@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>HotelOps</title>
+<link rel="stylesheet" href="styles.css">
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+</head>
+<body>
+
+<!-- LOGIN VIEW -->
+<div id="login-view" class="login-wrap hidden">
+  <div class="login-card">
+    <div class="login-logo">🏨</div>
+    <h1>HotelOps</h1>
+    <p class="login-sub">Sign in to manage your properties</p>
+    <div id="login-error" class="error-box hidden"></div>
+    <label>Email
+      <input type="email" id="login-email" autocomplete="username" placeholder="you@example.com">
+    </label>
+    <label>Password
+      <input type="password" id="login-password" autocomplete="current-password" placeholder="••••••••">
+    </label>
+    <button id="login-btn" class="btn-primary">Sign in</button>
+  </div>
+</div>
+
+<!-- APP VIEW -->
+<div id="app-view" class="hidden">
+  <header class="app-header">
+    <div class="header-title">🏨 HotelOps</div>
+    <div class="header-actions">
+      <button id="refresh-btn" class="icon-btn" title="Refresh">↻</button>
+      <div class="user-chip" id="user-chip">
+        <span id="user-email"></span> ▾
+        <div id="user-menu" class="user-menu hidden">
+          <button id="change-pw-btn">Change password</button>
+          <button id="signout-btn">Sign out</button>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <main id="tab-content"></main>
+
+  <nav class="tab-bar">
+    <button data-tab="overview" class="tab active">📊<span>Overview</span></button>
+    <button data-tab="rooms" class="tab">🛏️<span>Rooms</span></button>
+    <button data-tab="orders" class="tab">🧰<span>Orders</span></button>
+    <button data-tab="team" class="tab">👥<span>Team</span></button>
+    <button data-tab="history" class="tab">📜<span>History</span></button>
+  </nav>
+</div>
+
+<!-- MODAL -->
+<div id="modal-overlay" class="modal-overlay hidden">
+  <div class="modal" id="modal-box"></div>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>
