@@ -23,6 +23,25 @@
       <input type="password" id="login-password" autocomplete="current-password" placeholder="••••••••">
     </label>
     <button id="login-btn" class="btn-primary">Sign in</button>
+    <button id="forgot-btn" class="link-btn">Forgot password?</button>
+    <div id="login-info" class="info-box hidden"></div>
+  </div>
+</div>
+
+<!-- PASSWORD RESET VIEW -->
+<div id="recovery-view" class="login-wrap hidden">
+  <div class="login-card">
+    <div class="login-logo">🔑</div>
+    <h1>Set new password</h1>
+    <p class="login-sub">Choose a new password for your account</p>
+    <div id="recovery-error" class="error-box hidden"></div>
+    <label>New password
+      <input type="password" id="recovery-password" autocomplete="new-password" placeholder="••••••••">
+    </label>
+    <label>Confirm new password
+      <input type="password" id="recovery-confirm" autocomplete="new-password" placeholder="••••••••">
+    </label>
+    <button id="recovery-btn" class="btn-primary">Save new password</button>
   </div>
 </div>
 
