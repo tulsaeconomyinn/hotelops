@@ -156,19 +156,34 @@ function render() {
 /* ---------- OVERVIEW ---------- */
 function viewOverview() {
   if (!properties.length) return '<div class="empty">No properties yet.</div>';
-  return '<div class="section-head"><h2>Portfolio</h2></div>' + properties.map(p => {
+  const total = rooms.length;
+  const avail = rooms.filter(r => r.status === 'available').length;
+  const out = total - avail;
+  const openOrders = orders.filter(o => o.status !== 'completed').length;
+  const od = orders.filter(o => isOverdue(o)).length;
+  const kpis = `
+    <div class="kpi-grid">
+      <div class="kpi-card"><div class="kpi-label">Total rooms</div><div class="kpi-num">${total}</div><div class="kpi-cap">Across ${properties.length} properties</div></div>
+      <div class="kpi-card"><div class="kpi-label">Available</div><div class="kpi-num good">${avail}</div><div class="kpi-cap">${total ? Math.round(avail / total * 100) : 0}% ready to sell</div></div>
+      <div class="kpi-card"><div class="kpi-label">Out of service</div><div class="kpi-num ${out ? 'warn' : ''}">${out}</div><div class="kpi-cap">Needs work</div></div>
+      <div class="kpi-card"><div class="kpi-label">Open orders</div><div class="kpi-num ${od ? 'bad' : ''}">${openOrders}</div><div class="kpi-cap">${od ? od + ' overdue' : 'All on track'}</div></div>
+    </div>`;
+  return '<div class="section-head"><h2>Portfolio</h2></div>' + kpis + properties.map(p => {
     const pr = rooms.filter(r => r.property_id === p.id);
-    const avail = pr.filter(r => r.status === 'available').length;
-    const out = pr.filter(r => r.status !== 'available').length;
-    const open = orders.filter(o => o.property_id === p.id && o.status !== 'completed').length;
-    const od = orders.filter(o => o.property_id === p.id && isOverdue(o)).length;
+    const pavail = pr.filter(r => r.status === 'available').length;
+    const pout = pr.filter(r => r.status !== 'available').length;
+    const popen = orders.filter(o => o.property_id === p.id && o.status !== 'completed').length;
+    const pod = orders.filter(o => o.property_id === p.id && isOverdue(o)).length;
+    const pct = pr.length ? Math.round(pavail / pr.length * 100) : 0;
     return `<div class="card prop-card" data-prop="${p.id}">
       <div class="prop-name">${esc(p.name)}</div>
       <div class="prop-addr">${esc(p.address || '')}</div>
+      <div class="pbar"><div class="pbar-fill" style="width:${pct}%"></div></div>
+      <div class="prop-sub">${pavail} / ${pr.length} available${pout ? ' · ' + pout + ' down' : ''}</div>
       <div class="stat-row">
-        <div class="stat ok"><div class="n">${avail}</div><div class="l">Available</div></div>
-        <div class="stat ${out ? 'warn' : ''}"><div class="n">${out}</div><div class="l">Out of svc</div></div>
-        <div class="stat ${od ? 'bad' : 'info'}"><div class="n">${open}</div><div class="l">Open orders${od ? ' (' + od + ' overdue)' : ''}</div></div>
+        <div class="stat ok"><div class="n">${pavail}</div><div class="l">Available</div></div>
+        <div class="stat ${pout ? 'warn' : ''}"><div class="n">${pout}</div><div class="l">Out of svc</div></div>
+        <div class="stat ${pod ? 'bad' : 'info'}"><div class="n">${popen}</div><div class="l">Open orders${pod ? ' (' + pod + ' overdue)' : ''}</div></div>
       </div>
     </div>`;
   }).join('');
