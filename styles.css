@@ -38,6 +38,14 @@ body {
   background: #fef2f2; color: #b91c1c; border: 1px solid #fecaca;
   border-radius: 10px; padding: 10px; font-size: 14px; margin-bottom: 14px;
 }
+.info-box {
+  background: #eff6ff; color: #1d4ed8; border: 1px solid #bfdbfe;
+  border-radius: 10px; padding: 10px; font-size: 14px; margin-top: 14px;
+}
+.link-btn {
+  background: none; border: none; color: #2563eb; font-size: 14px;
+  font-weight: 600; cursor: pointer; margin-top: 12px; padding: 4px;
+}
 
 /* BUTTONS */
 .btn-primary {
