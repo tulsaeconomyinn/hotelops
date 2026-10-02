@@ -127,6 +127,19 @@ body {
 .stat.bad .n { color: #dc2626; }
 .stat.info .n { color: #1E5B44; }
 
+/* KPI CARDS (portfolio top strip) */
+.kpi-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 14px; }
+.kpi-card { background: #fff; border: 1px solid #e5e7eb; border-radius: 16px; padding: 14px; box-shadow: 0 1px 3px rgba(0,0,0,.05); }
+.kpi-label { font-size: 12px; color: #6b7280; font-weight: 600; }
+.kpi-num { font-size: 30px; font-weight: 800; letter-spacing: -0.5px; margin: 4px 0 2px; }
+.kpi-num.good { color: #1E5B44; }
+.kpi-num.warn { color: #d97706; }
+.kpi-num.bad { color: #dc2626; }
+.kpi-cap { font-size: 11px; color: #9ca3af; }
+.pbar { height: 8px; background: #f0f0ee; border-radius: 6px; overflow: hidden; margin: 10px 0 6px; }
+.pbar-fill { height: 100%; background: #1E5B44; border-radius: 6px; }
+.prop-sub { font-size: 12px; color: #6b7280; margin-bottom: 10px; font-weight: 600; }
+
 /* FILTERS */
 .filter-bar { display: flex; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; }
 .filter-bar select, .filter-bar input[type="search"] {
@@ -232,3 +245,55 @@ body {
 .export-row { display: flex; gap: 10px; margin-bottom: 16px; }
 .export-row .btn-secondary { flex: 1; }
 .loading { text-align: center; color: #9ca3af; padding: 40px; }
+
+/* DARK MODE — matches the original demo's dark theme */
+@media (prefers-color-scheme: dark) {
+  body { background: #0C1411; color: #EDEFF0; }
+  .app-header { background: #0C1411; border-bottom: 1px solid #1E2D27; }
+  .icon-btn { background: rgba(255,255,255,.1); color: #fff; }
+  .user-menu { background: #14201B; border: 1px solid #223028; color: #EDEFF0; }
+  .user-menu button:active { background: #1E2D27; }
+  .tab-bar { background: #0C1411; border-top: 1px solid #1E2D27; }
+  .tab { color: #6B7F76; }
+  .tab.active { color: #4ADE80; }
+  .section-head h2 { color: #fff; }
+  .card, .room-row, .team-row, .hist-row, .kpi-card {
+    background: #14201B; border-color: #223028; box-shadow: none;
+  }
+  .room-row:active, .team-row:active, .prop-card:active { background: #1A2822; }
+  .prop-name, .room-num, .order-title, .team-name, .hist-room, .kpi-num { color: #fff; }
+  .prop-addr, .room-prop, .order-meta, .hist-details, .prop-sub { color: #9DB0A6; }
+  .kpi-label { color: #8FA39B; }
+  .kpi-cap, .hist-time, .hist-by { color: #6B7F76; }
+  .kpi-num.good { color: #4ADE80; }
+  .stat { background: #0C1411; border-color: #223028; }
+  .stat .l { color: #8FA39B; }
+  .stat.ok .n, .stat.info .n { color: #4ADE80; }
+  .btn-primary { background: #34D399; color: #06281C; }
+  .btn-primary:active { background: #2BBF8A; }
+  .btn-secondary { background: #1C2B25; border-color: #2A3B33; color: #EDEFF0; }
+  .link-btn { color: #4ADE80; }
+  .chip { background: #14201B; border-color: #2A3B33; color: #B7C6BD; }
+  .chip.active { background: #34D399; border-color: #34D399; color: #06281C; }
+  .filter-bar select, .filter-bar input[type="search"] {
+    background: #14201B; border-color: #2A3B33; color: #EDEFF0;
+  }
+  .badge.available, .badge.open, .badge.completed, .badge.medium { background: rgba(74,222,128,.14); color: #4ADE80; }
+  .badge.unavailable, .badge.low { background: #223028; color: #9DB0A6; }
+  .badge.maintenance, .badge.urgent { background: rgba(248,113,113,.14); color: #F87171; }
+  .badge.in_progress, .badge.high { background: rgba(251,191,36,.14); color: #FBBF24; }
+  .pbar { background: #223028; }
+  .pbar-fill { background: #4ADE80; }
+  .team-count { background: rgba(74,222,128,.14); color: #4ADE80; }
+  .modal-overlay { background: rgba(0,0,0,.6); }
+  .modal { background: #14201B; }
+  .modal h3 { color: #fff; }
+  .modal label { color: #B7C6BD; }
+  .modal input, .modal select, .modal textarea {
+    background: #0C1411; border-color: #2A3B33; color: #EDEFF0;
+  }
+  .info-box { background: rgba(74,222,128,.1); border-color: rgba(74,222,128,.25); color: #4ADE80; }
+  .empty, .loading { color: #6B7F76; }
+  .fab { background: #34D399; color: #06281C; box-shadow: 0 4px 14px rgba(52,211,153,.35); }
+  .fab:active { background: #2BBF8A; }
+}
