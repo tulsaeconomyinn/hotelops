@@ -17,12 +17,28 @@ const roomLabel = o => { const r = rooms.find(r => r.id === o.room_id); return r
 const fmtDateTime = ts => { try { return new Date(ts).toLocaleString([], {month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}); } catch(e){ return ''; } };
 
 /* ---------- AUTH ---------- */
+const APP_URL = 'https://tulsaeconomyinn.github.io/hotelops/';
+let inRecovery = false;
+
+function showRecovery() {
+  inRecovery = true;
+  history.replaceState(null, '', APP_URL);
+  $('login-view').classList.add('hidden');
+  $('app-view').classList.add('hidden');
+  $('recovery-view').classList.remove('hidden');
+}
+
 async function init() {
+  client.auth.onAuthStateChange(event => { if (event === 'PASSWORD_RECOVERY') showRecovery(); });
+  const hasRecoveryCode = new URLSearchParams(location.search).get('code') || location.hash.includes('type=recovery');
   const { data } = await client.auth.getSession();
-  if (data.session) { await enterApp(data.session.user.email); }
+  if (hasRecoveryCode) { /* wait for PASSWORD_RECOVERY event */ }
+  else if (data.session) { await enterApp(data.session.user.email); }
   else { $('login-view').classList.remove('hidden'); }
 
   $('login-btn').onclick = doLogin;
+  $('forgot-btn').onclick = doForgotPassword;
+  $('recovery-btn').onclick = doRecoverySave;
   $('login-password').addEventListener('keydown', e => { if (e.key === 'Enter') doLogin(); });
   $('signout-btn').onclick = async () => { await client.auth.signOut(); location.reload(); };
   $('refresh-btn').onclick = () => loadAll();
@@ -41,6 +57,33 @@ async function doLogin() {
   $('login-btn').textContent = 'Sign in';
   if (error) { errBox.textContent = error.message; errBox.classList.remove('hidden'); return; }
   await enterApp(data.user.email);
+}
+
+async function doForgotPassword() {
+  const email = $('login-email').value.trim();
+  const errBox = $('login-error'), infoBox = $('login-info');
+  errBox.classList.add('hidden'); infoBox.classList.add('hidden');
+  if (!email) { errBox.textContent = 'Type your email above first.'; errBox.classList.remove('hidden'); return; }
+  $('forgot-btn').textContent = 'Sending…';
+  const { error } = await client.auth.resetPasswordForEmail(email, { redirectTo: APP_URL });
+  $('forgot-btn').textContent = 'Forgot password?';
+  if (error) { errBox.textContent = error.message; errBox.classList.remove('hidden'); return; }
+  infoBox.textContent = 'Reset link sent — check your email (including spam).';
+  infoBox.classList.remove('hidden');
+}
+
+async function doRecoverySave() {
+  const pw = $('recovery-password').value, confirm = $('recovery-confirm').value;
+  const errBox = $('recovery-error');
+  errBox.classList.add('hidden');
+  if (pw.length < 6) { errBox.textContent = 'Password must be at least 6 characters.'; errBox.classList.remove('hidden'); return; }
+  if (pw !== confirm) { errBox.textContent = 'Passwords do not match.'; errBox.classList.remove('hidden'); return; }
+  $('recovery-btn').textContent = 'Saving…';
+  const { error } = await client.auth.updateUser({ password: pw });
+  $('recovery-btn').textContent = 'Save new password';
+  if (error) { errBox.textContent = error.message; errBox.classList.remove('hidden'); return; }
+  await client.auth.signOut();
+  location.reload();
 }
 
 async function enterApp(email) {
