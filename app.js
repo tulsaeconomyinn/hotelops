@@ -7,6 +7,11 @@ let userEmail = '';
 let properties = [], rooms = [], orders = [], historyRows = [];
 let currentTab = 'overview';
 let f = { property: 'all', roomStatus: 'all', roomSearch: '', orderStatus: 'open', orderProperty: 'all', histProperty: 'all', histSearch: '' };
+/* Per-user scoping: profile.property_id NULL (or role 'admin') = all-properties admin.
+   Managers/staff with a property_id are locked to that one property. */
+let profile = null;
+const isAdmin = () => !!profile && (profile.role === 'admin' || !profile.property_id);
+const scopedProp = () => (isAdmin() ? null : profile.property_id);
 
 const $ = id => document.getElementById(id);
 const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -33,7 +38,7 @@ async function init() {
   const hasRecoveryCode = new URLSearchParams(location.search).get('code') || location.hash.includes('type=recovery');
   const { data } = await client.auth.getSession();
   if (hasRecoveryCode) { /* wait for PASSWORD_RECOVERY event */ }
-  else if (data.session) { await enterApp(data.session.user.email); }
+  else if (data.session) { await enterApp(data.session.user.email, data.session.user.id); }
   else { $('login-view').classList.remove('hidden'); }
 
   $('login-btn').onclick = doLogin;
@@ -56,7 +61,7 @@ async function doLogin() {
   const { data, error } = await client.auth.signInWithPassword({ email, password });
   $('login-btn').textContent = 'Sign in';
   if (error) { errBox.textContent = error.message; errBox.classList.remove('hidden'); return; }
-  await enterApp(data.user.email);
+  await enterApp(data.user.email, data.user.id);
 }
 
 async function doForgotPassword() {
@@ -86,8 +91,26 @@ async function doRecoverySave() {
   location.reload();
 }
 
-async function enterApp(email) {
+async function enterApp(email, userId) {
   userEmail = email;
+  // Fetch the user's profile: role + property decides what they can see.
+  const { data: prof } = await client.from('profiles')
+    .select('role, property_id').eq('id', userId).single();
+  if (!prof) {
+    // No profile row -> RLS would show nothing. Fail closed with a clear message.
+    await client.auth.signOut();
+    $('app-view').classList.add('hidden');
+    $('login-view').classList.remove('hidden');
+    const errBox = $('login-error');
+    errBox.textContent = 'No HotelOps profile for this account — ask your admin to set you up.';
+    errBox.classList.remove('hidden');
+    return;
+  }
+  profile = prof;
+  if (!isAdmin()) {
+    // Lock every property filter to the manager's own hotel.
+    f.property = f.orderProperty = f.histProperty = profile.property_id;
+  }
   $('login-view').classList.add('hidden');
   $('app-view').classList.remove('hidden');
   $('user-email').textContent = email;
@@ -126,6 +149,14 @@ async function loadAll() {
     return;
   }
   properties = p.data; rooms = r.data; orders = o.data; historyRows = h.data;
+  const ht = $('header-title');
+  if (ht) {
+    if (isAdmin()) ht.textContent = '🏨 HotelOps';
+    else {
+      const sp = properties.find(p => p.id === scopedProp());
+      ht.innerHTML = '🏨 HotelOps <span class="header-prop">· ' + esc(sp ? sp.name : '') + '</span>';
+    }
+  }
   render();
 }
 
@@ -163,12 +194,14 @@ function viewOverview() {
   const od = orders.filter(o => isOverdue(o)).length;
   const kpis = `
     <div class="kpi-grid">
-      <div class="kpi-card"><div class="kpi-label">Total rooms</div><div class="kpi-num">${total}</div><div class="kpi-cap">Across ${properties.length} properties</div></div>
+      <div class="kpi-card"><div class="kpi-label">Total rooms</div><div class="kpi-num">${total}</div><div class="kpi-cap">${isAdmin() ? 'Across ' + properties.length + ' properties' : esc(propName(scopedProp()))}</div></div>
       <div class="kpi-card"><div class="kpi-label">Available</div><div class="kpi-num good">${avail}</div><div class="kpi-cap">${total ? Math.round(avail / total * 100) : 0}% ready to sell</div></div>
       <div class="kpi-card"><div class="kpi-label">Out of service</div><div class="kpi-num ${out ? 'warn' : ''}">${out}</div><div class="kpi-cap">Needs work</div></div>
       <div class="kpi-card"><div class="kpi-label">Open orders</div><div class="kpi-num ${od ? 'bad' : ''}">${openOrders}</div><div class="kpi-cap">${od ? od + ' overdue' : 'All on track'}</div></div>
     </div>`;
-  return '<div class="section-head"><h2>Portfolio</h2></div>' + kpis + properties.map(p => {
+  const headName = isAdmin() ? 'Portfolio' : esc(propName(scopedProp()));
+  return `<div class="section-head"><h2>${headName}</h2></div>
+    <button class="btn-primary report-down-btn" id="report-down-btn">🚨 Report room down</button>` + kpis + properties.map(p => {
     const pr = rooms.filter(r => r.property_id === p.id);
     const pavail = pr.filter(r => r.status === 'available').length;
     const pout = pr.filter(r => r.status !== 'available').length;
@@ -191,8 +224,9 @@ function viewOverview() {
 
 /* ---------- ROOMS ---------- */
 function viewRooms() {
-  const propOpts = ['<option value="all">All properties</option>'] +
-    properties.map(p => `<option value="${p.id}" ${f.property === p.id ? 'selected' : ''}>${esc(p.name)}</option>`).join('');
+  const propSel = isAdmin()
+    ? `<select id="f-property">${['<option value="all">All properties</option>'].concat(properties.map(p => `<option value="${p.id}" ${f.property === p.id ? 'selected' : ''}>${esc(p.name)}</option>`)).join('')}</select>`
+    : '';
   const chips = ['all', 'available', 'unavailable', 'maintenance'].map(s =>
     `<button class="chip ${f.roomStatus === s ? 'active' : ''}" data-rs="${s}">${s === 'all' ? 'All' : s[0].toUpperCase() + s.slice(1)}</button>`).join('');
   let list = rooms.filter(r =>
@@ -209,7 +243,7 @@ function viewRooms() {
     </div>`).join('');
   return `
     <div class="section-head"><h2>Rooms</h2><button class="btn-secondary btn-small" id="add-room-btn">+ Add room</button></div>
-    <div class="filter-bar"><select id="f-property">${propOpts}</select>
+    <div class="filter-bar">${propSel}
     <input type="search" id="f-search" placeholder="Search room #" value="${esc(f.roomSearch)}"></div>
     <div class="chips">${chips}</div>
     ${rows || '<div class="empty">No rooms match. Add rooms to get started.</div>'}
@@ -248,10 +282,13 @@ function openRoomModal(roomId) {
 }
 
 function openAddRoom() {
-  const propOpts = properties.map(p => `<option value="${p.id}">${esc(p.name)}</option>`).join('');
+  const admin = isAdmin();
+  const propField = admin
+    ? `<label>Property<select id="nr-prop">${properties.map(p => `<option value="${p.id}">${esc(p.name)}</option>`).join('')}</select></label>`
+    : '';
   openModal(`
     <h3>Add room</h3>
-    <label>Property<select id="nr-prop">${propOpts}</select></label>
+    ${propField}
     <label>Room number<input id="nr-num" placeholder="e.g. 205"></label>
     <div class="modal-actions">
       <button class="btn-secondary" onclick="closeModal()">Cancel</button>
@@ -260,16 +297,72 @@ function openAddRoom() {
   $('nr-save').onclick = async () => {
     const num = $('nr-num').value.trim();
     if (!num) { alert('Enter a room number.'); return; }
-    const { error } = await client.from('rooms').insert({ property_id: $('nr-prop').value, room_number: num, status: 'available' });
+    const pid = admin ? $('nr-prop').value : scopedProp();
+    const { error } = await client.from('rooms').insert({ property_id: pid, room_number: num, status: 'available' });
     if (error) { alert(error.message); return; }
+    closeModal(); await loadAll();
+  };
+}
+
+/* ---------- REPORT ROOM DOWN ---------- */
+/* One simple form: date, room, why, expected return, who's fixing it.
+   Creates a work order AND marks the room unavailable, plus a history entry. */
+function openReportDown() {
+  const admin = isAdmin();
+  const propField = admin
+    ? `<label>Property<select id="rd-prop">${properties.map(p => `<option value="${p.id}">${esc(p.name)}</option>`).join('')}</select></label>`
+    : `<div class="static-prop">${esc(propName(scopedProp()))}</div>`;
+  openModal(`
+    <h3>🚨 Report room down</h3>
+    ${propField}
+    <label>Date<input type="date" id="rd-date" value="${todayISO()}"></label>
+    <label>Room<select id="rd-room"></select></label>
+    <label>What's wrong<input id="rd-reason" placeholder="e.g. AC not cooling"></label>
+    <label>Expected back<input type="date" id="rd-return"></label>
+    <label>Who's working on it<input id="rd-who" placeholder="Name"></label>
+    <div class="modal-actions">
+      <button class="btn-secondary" onclick="closeModal()">Cancel</button>
+      <button class="btn-primary" id="rd-save">Report it</button>
+    </div>`);
+  const fillRooms = () => {
+    const pid = admin ? $('rd-prop').value : scopedProp();
+    $('rd-room').innerHTML =
+      rooms.filter(r => r.property_id === pid)
+        .sort((a, b) => a.room_number.localeCompare(b.room_number, undefined, { numeric: true }))
+        .map(r => `<option value="${r.id}">Room ${esc(r.room_number)} (${r.status})</option>`).join('') ||
+      '<option value="">No rooms yet</option>';
+  };
+  if (admin) $('rd-prop').onchange = fillRooms;
+  fillRooms();
+  $('rd-save').onclick = async () => {
+    const reason = $('rd-reason').value.trim();
+    const rid = $('rd-room').value;
+    if (!rid) { alert('Pick a room.'); return; }
+    if (!reason) { alert('Say what\'s wrong with the room.'); return; }
+    const pid = admin ? $('rd-prop').value : scopedProp();
+    const rm = rooms.find(r => r.id === rid);
+    const when = $('rd-date').value || todayISO();
+    const ret = $('rd-return').value || null;
+    const who = $('rd-who').value.trim() || null;
+    const { error: oerr } = await client.from('work_orders').insert({
+      property_id: pid, room_id: rid, title: reason, status: 'open', priority: 'medium',
+      description: 'Reported down on ' + when + '.',
+      assigned_to: who, expected_return_date: ret, created_by: userEmail
+    });
+    if (oerr) { alert(oerr.message); return; }
+    const { error: rerr } = await client.from('rooms').update({ status: 'unavailable' }).eq('id', rid);
+    if (rerr) { alert(rerr.message); return; }
+    await logHistory({ property_id: pid, room_id: rid, room_number: rm ? rm.room_number : null,
+      event_type: 'room_down', details: `Room reported down on ${when}: ${reason}${who ? ' — ' + who + ' on it' : ''}${ret ? ' — expected back ' + ret : ''}` });
     closeModal(); await loadAll();
   };
 }
 
 /* ---------- WORK ORDERS ---------- */
 function viewOrders() {
-  const propOpts = ['<option value="all">All properties</option>'] +
-    properties.map(p => `<option value="${p.id}" ${f.orderProperty === p.id ? 'selected' : ''}>${esc(p.name)}</option>`).join('');
+  const propSel = isAdmin()
+    ? `<select id="f-orderprop">${['<option value="all">All properties</option>'].concat(properties.map(p => `<option value="${p.id}" ${f.orderProperty === p.id ? 'selected' : ''}>${esc(p.name)}</option>`)).join('')}</select>`
+    : '';
   const chips = [['open', 'Open'], ['in_progress', 'In Progress'], ['completed', 'Done'], ['all', 'All']].map(([v, l]) =>
     `<button class="chip ${f.orderStatus === v ? 'active' : ''}" data-os="${v}">${l}</button>`).join('');
   let list = orders.filter(o =>
@@ -289,17 +382,20 @@ function viewOrders() {
   }).join('');
   return `
     <div class="section-head"><h2>Work orders</h2></div>
-    <div class="filter-bar"><select id="f-orderprop">${propOpts}</select></div>
+    <div class="filter-bar">${propSel}</div>
     <div class="chips">${chips}</div>
     ${cards || '<div class="empty">No work orders here.</div>'}
     <button class="fab" id="fab-order">+</button>`;
 }
 
 function openNewOrder() {
-  const propOpts = properties.map(p => `<option value="${p.id}">${esc(p.name)}</option>`).join('');
+  const admin = isAdmin();
+  const propField = admin
+    ? `<label>Property<select id="no-prop">${properties.map(p => `<option value="${p.id}">${esc(p.name)}</option>`).join('')}</select></label>`
+    : `<div class="static-prop">${esc(propName(scopedProp()))}</div>`;
   openModal(`
     <h3>New work order</h3>
-    <label>Property<select id="no-prop">${propOpts}</select></label>
+    ${propField}
     <label>Room<select id="no-room"></select></label>
     <label>Title<input id="no-title" placeholder="e.g. AC not cooling"></label>
     <label>Details<textarea id="no-desc" placeholder="What's wrong, what needs doing…"></textarea></label>
@@ -311,17 +407,18 @@ function openNewOrder() {
       <button class="btn-primary" id="no-save">Create</button>
     </div>`);
   const fillRooms = () => {
-    const pid = $('no-prop').value;
+    const pid = admin ? $('no-prop').value : scopedProp();
     $('no-room').innerHTML = '<option value="">— No specific room —</option>' +
       rooms.filter(r => r.property_id === pid)
         .sort((a, b) => a.room_number.localeCompare(b.room_number, undefined, { numeric: true }))
         .map(r => `<option value="${r.id}">Room ${esc(r.room_number)} (${r.status})</option>`).join('');
   };
-  $('no-prop').onchange = fillRooms; fillRooms();
+  if (admin) $('no-prop').onchange = fillRooms;
+  fillRooms();
   $('no-save').onclick = async () => {
     const title = $('no-title').value.trim();
     if (!title) { alert('Enter a title.'); return; }
-    const pid = $('no-prop').value, rid = $('no-room').value || null;
+    const pid = admin ? $('no-prop').value : scopedProp(), rid = $('no-room').value || null;
     const { data, error } = await client.from('work_orders').insert({
       property_id: pid, room_id: rid, title,
       description: $('no-desc').value.trim() || null,
@@ -366,14 +463,79 @@ function viewTeam() {
     </div>`;
   }).join('');
   return `<div class="section-head"><h2>Team workload</h2></div>
+    ${addManagerSection()}
     <div style="font-size:13px;color:#64748b;margin-bottom:10px">Open work orders per person. Tap a row to see their orders.</div>
     ${rows || '<div class="empty">No open work orders.</div>'}`;
 }
 
+/* ---------- MANAGER ONBOARDING (admin only) ----------
+   Admin enters email + name + hotel. The create-manager edge function makes
+   the login, links the hotel, and emails the credentials. */
+function addManagerSection() {
+  if (!isAdmin()) return '';
+  return `<div class="card am-card">
+    <h3 style="margin:0 0 6px;font-size:17px;font-weight:800">Add manager</h3>
+    <p style="font-size:13px;color:#64748b;margin:0 0 12px">Creates their login, assigns their hotel, and emails them the sign-in details automatically.</p>
+    <label>Email<input type="email" id="am-email" placeholder="manager@example.com" autocomplete="off"></label>
+    <label>Full name<input id="am-name" placeholder="e.g. Jordan Lee" autocomplete="off"></label>
+    <label>Assigned hotel<select id="am-prop">${properties.map(p => `<option value="${p.id}">${esc(p.name)}</option>`).join('')}</select></label>
+    <button class="btn-primary" id="am-create">Create account &amp; send login</button>
+    <div id="am-error" class="error-box hidden" style="margin-top:12px;margin-bottom:0"></div>
+    <div id="am-result" class="hidden" style="margin-top:12px"></div>
+  </div>`;
+}
+
+async function createManagerAccount() {
+  const email = $('am-email').value.trim();
+  const name = $('am-name').value.trim();
+  const propertyId = $('am-prop').value;
+  const errBox = $('am-error'), resBox = $('am-result');
+  errBox.classList.add('hidden'); resBox.classList.add('hidden'); resBox.innerHTML = '';
+  if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { errBox.textContent = 'Enter a valid email address.'; errBox.classList.remove('hidden'); return; }
+  if (!propertyId) { errBox.textContent = 'Pick the hotel they manage.'; errBox.classList.remove('hidden'); return; }
+  const btn = $('am-create');
+  btn.textContent = 'Creating…'; btn.disabled = true;
+  try {
+    const { data: { session } } = await client.auth.getSession();
+    if (!session) { errBox.textContent = 'You are not signed in.'; errBox.classList.remove('hidden'); return; }
+    const resp = await fetch(SUPABASE_URL + '/functions/v1/create-manager', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + session.access_token, 'apikey': SUPABASE_ANON_KEY, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, name, property_id: propertyId })
+    });
+    const out = await resp.json();
+    if (!out.ok) { errBox.textContent = out.error || 'Something went wrong.'; errBox.classList.remove('hidden'); return; }
+    resBox.classList.remove('hidden');
+    resBox.innerHTML = `<div class="info-box" style="margin-top:0">
+      <strong>✅ Account created.</strong> Login details were emailed to ${esc(email)}.<br><br>
+      Temporary password (shown once):<br>
+      <code id="am-temp" class="am-temp">${esc(out.tempPassword)}</code><br>
+      <button class="btn-secondary btn-small" id="am-copy" style="margin-top:8px">📋 Copy password</button><br>
+      <small style="color:#64748b">Tell them to change it after their first sign-in (top-right menu → Change password).</small>
+    </div>`;
+    $('am-copy').onclick = async () => {
+      const pw = $('am-temp').textContent;
+      try { await navigator.clipboard.writeText(pw); $('am-copy').textContent = '✓ Copied'; }
+      catch (e) {
+        const ta = document.createElement('textarea'); ta.value = pw; document.body.appendChild(ta);
+        ta.select(); try { document.execCommand('copy'); $('am-copy').textContent = '✓ Copied'; } catch (_) {}
+        document.body.removeChild(ta);
+      }
+    };
+    $('am-email').value = ''; $('am-name').value = '';
+  } catch (e) {
+    errBox.textContent = 'Could not reach the server. Check your connection and try again.';
+    errBox.classList.remove('hidden');
+  } finally {
+    btn.textContent = 'Create account & send login'; btn.disabled = false;
+  }
+}
+
 /* ---------- HISTORY ---------- */
 function viewHistory() {
-  const propOpts = ['<option value="all">All properties</option>'] +
-    properties.map(p => `<option value="${p.id}" ${f.histProperty === p.id ? 'selected' : ''}>${esc(p.name)}</option>`).join('');
+  const propSel = isAdmin()
+    ? `<select id="f-histprop">${['<option value="all">All properties</option>'].concat(properties.map(p => `<option value="${p.id}" ${f.histProperty === p.id ? 'selected' : ''}>${esc(p.name)}</option>`)).join('')}</select>`
+    : '';
   const list = historyRows.filter(h =>
     (f.histProperty === 'all' || h.property_id === f.histProperty) &&
     (!f.histSearch || (h.room_number || '').toLowerCase().includes(f.histSearch.toLowerCase()) ||
@@ -390,7 +552,7 @@ function viewHistory() {
       <button class="btn-secondary" id="exp-rooms">⬇ Rooms CSV</button>
       <button class="btn-secondary" id="exp-orders">⬇ Orders CSV</button>
     </div>
-    <div class="filter-bar"><select id="f-histprop">${propOpts}</select>
+    <div class="filter-bar">${propSel}
     <input type="search" id="f-histsearch" placeholder="Search room or details…" value="${esc(f.histSearch)}"></div>
     ${rows || '<div class="empty">No history yet.</div>'}`;
 }
@@ -439,6 +601,7 @@ function bindView() {
     await loadAll();
   });
   const arb = $('add-room-btn'); if (arb) arb.onclick = openAddRoom;
+  const rdb = $('report-down-btn'); if (rdb) rdb.onclick = openReportDown;
   const fabr = $('fab-room'); if (fabr) fabr.onclick = openAddRoom;
   const fabo = $('fab-order'); if (fabo) fabo.onclick = openNewOrder;
   const fop = $('f-orderprop'); if (fop) fop.onchange = () => { f.orderProperty = fop.value; render(); };
@@ -448,6 +611,7 @@ function bindView() {
     f.orderStatus = 'all'; f.orderProperty = 'all'; switchTab('orders');
     // highlight this person's orders via alert-free approach: filter not implemented per-person, show all
   });
+  const amc = $('am-create'); if (amc) amc.onclick = createManagerAccount;
   const fhp = $('f-histprop'); if (fhp) fhp.onchange = () => { f.histProperty = fhp.value; render(); };
   const fhs = $('f-histsearch'); if (fhs) fhs.oninput = () => { f.histSearch = fhs.value; render(); if ($('f-histsearch')) { $('f-histsearch').focus(); $('f-histsearch').setSelectionRange(999, 999); } };
   const er = $('exp-rooms'); if (er) er.onclick = exportRooms;

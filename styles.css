@@ -246,6 +246,18 @@ body {
 .export-row .btn-secondary { flex: 1; }
 .loading { text-align: center; color: #9ca3af; padding: 40px; }
 
+/* SCOPED MANAGER VIEW */
+.header-prop { font-size: 14px; font-weight: 600; opacity: .85; }
+.report-down-btn { width: 100%; margin: 0 0 14px; }
+.static-prop {
+  font-size: 14px; font-weight: 600; color: #374151;
+  background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 12px;
+  padding: 11px 12px; margin-bottom: 10px;
+}
+@media (prefers-color-scheme: dark) {
+  .static-prop { background: #0C1411; border-color: #2A3B33; color: #B7C6BD; }
+}
+
 /* DARK MODE — matches the original demo's dark theme */
 @media (prefers-color-scheme: dark) {
   body { background: #0C1411; color: #EDEFF0; }
@@ -296,4 +308,18 @@ body {
   .empty, .loading { color: #6B7F76; }
   .fab { background: #34D399; color: #06281C; box-shadow: 0 4px 14px rgba(52,211,153,.35); }
   .fab:active { background: #2BBF8A; }
+}
+
+/* ADD MANAGER (Team tab, admin only) */
+.am-card label { display: block; font-size: 13px; font-weight: 600; color: #374151; margin-bottom: 10px; }
+.am-card input, .am-card select {
+  width: 100%; margin-top: 6px; padding: 12px 14px;
+  border: 1px solid #d1d5db; border-radius: 12px; font-size: 16px;
+  background: #fff; color: #111827;
+}
+.am-card input:focus, .am-card select:focus { outline: none; border-color: #1E5B44; box-shadow: 0 0 0 3px rgba(30,91,68,.12); }
+.am-temp {
+  display: inline-block; font-size: 20px; font-weight: 800; letter-spacing: 1px;
+  background: #0C1411; color: #4ADE80; border-radius: 10px; padding: 10px 16px;
+  user-select: all; margin-top: 4px;
 }
