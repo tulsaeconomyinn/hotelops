@@ -267,7 +267,6 @@ function viewOverview() {
       <div class="kpi-card"><div class="kpi-label">Total rooms</div><div class="kpi-num">${total}</div><div class="kpi-cap">${properties.length > 1 ? 'Across ' + properties.length + ' properties' : esc(propName(scopedProp()))}</div></div>
       <div class="kpi-card"><div class="kpi-label">Available</div><div class="kpi-num good">${avail}</div><div class="kpi-cap">${total ? Math.floor(avail / total * 100) : 0}% ready to sell</div></div>
       <div class="kpi-card"><div class="kpi-label">Out of service</div><div class="kpi-num ${out ? 'warn' : ''}">${out}</div><div class="kpi-cap">Needs work</div></div>
-      <div class="kpi-card"><div class="kpi-label">Open orders</div><div class="kpi-num ${od ? 'bad' : ''}">${openOrders}</div><div class="kpi-cap">${od ? od + ' overdue' : 'All on track'}</div></div>
     </div>`;
   const headName = isAdmin() ? 'Portfolio' : (scopedProp() ? esc(propName(scopedProp())) : 'My hotels');
   return `<div class="section-head"><h2>${headName}</h2></div>
@@ -286,7 +285,6 @@ function viewOverview() {
       <div class="stat-row">
         <div class="stat ok"><div class="n">${pavail}</div><div class="l">Available</div></div>
         <div class="stat ${pout ? 'warn' : ''}"><div class="n">${pout}</div><div class="l">Out of svc</div></div>
-        <div class="stat ${pod ? 'bad' : 'info'}"><div class="n">${popen}</div><div class="l">Open orders${pod ? ' (' + pod + ' overdue)' : ''}</div></div>
       </div>
     </div>`;
   }).join('');
@@ -297,11 +295,11 @@ function viewRooms() {
   const propSel = canPickProp()
     ? `<select id="f-property">${['<option value="all">' + allPropsLabel() + '</option>'].concat(properties.map(p => `<option value="${p.id}" ${f.property === p.id ? 'selected' : ''}>${esc(p.name)}</option>`)).join('')}</select>`
     : '';
-  const chips = ['all', 'available', 'unavailable', 'maintenance'].map(s =>
+  const chips = ['all', 'available', 'maintenance'].map(s =>
     `<button class="chip ${f.roomStatus === s ? 'active' : ''}" data-rs="${s}">${s === 'all' ? 'All' : s[0].toUpperCase() + s.slice(1)}</button>`).join('');
   let list = rooms.filter(r =>
     (f.property === 'all' || r.property_id === f.property) &&
-    (f.roomStatus === 'all' || r.status === f.roomStatus) &&
+    (f.roomStatus === 'all' || (f.roomStatus === 'maintenance' ? r.status !== 'available' : r.status === f.roomStatus)) &&
     (!f.roomSearch || r.room_number.toLowerCase().includes(f.roomSearch.toLowerCase())));
   // sort: non-available first, then room number
   list.sort((a, b) => (a.status === 'available') - (b.status === 'available') || a.room_number.localeCompare(b.room_number, undefined, { numeric: true }));
@@ -309,12 +307,12 @@ function viewRooms() {
     // For a down room, surface its open work order's key facts right on the
     // row: date entered, date due back, and who is working on it.
     const oo = r.status !== 'available' ? orders.find(o => o.room_id === r.id && o.status !== 'completed') : null;
-    const downMeta = oo ? `<div class="room-down-meta">In: ${fmtDate(oo.created_at)} · Due: ${oo.expected_return_date ? `<span class="${isOverdue(oo) ? 'due-od' : ''}">${fmtDue(oo.expected_return_date)}${isOverdue(oo) ? ' ⚠️' : ''}</span>` : '—'} · 👤 ${esc(oo.assigned_to || 'Unassigned')}</div>` : '';
+    const downMeta = oo ? `<div class="room-down-meta">${oo.title ? '🔧 ' + esc(oo.title) + ' · ' : ''}In: ${fmtDate(oo.created_at)} · Due: ${oo.expected_return_date ? `<span class="${isOverdue(oo) ? 'due-od' : ''}">${fmtDue(oo.expected_return_date)}${isOverdue(oo) ? ' ⚠️' : ''}</span>` : '—'} · 👤 ${esc(oo.assigned_to || 'Unassigned')}</div>` : '';
+    const down = r.status !== 'available';
     return `
     <div class="room-row" data-room="${r.id}">
       <div><div class="room-num">Room ${esc(r.room_number)}</div><div class="room-prop">${esc(propName(r.property_id))}</div>${downMeta}</div>
-      <div><span class="badge ${r.status}">${r.status.replace('_', ' ')}</span>
-      ${r.status !== 'available' ? `<button class="btn-secondary btn-small quick-avail" data-avail="${r.id}">✓ Available</button>` : ''}</div>
+      <div><span class="badge ${down ? 'maintenance' : 'available'}">${down ? 'maintenance' : 'available'}</span></div>
     </div>`;
   }).join('');
   return `
@@ -329,8 +327,9 @@ function viewRooms() {
 function openRoomModal(roomId) {
   const r = rooms.find(x => x.id === roomId);
   if (!r) return;
-  const stBtns = ['available', 'unavailable', 'maintenance'].map(s =>
-    `<button class="chip ${r.status === s ? 'active' : ''}" data-setst="${s}">${s[0].toUpperCase() + s.slice(1)}</button>`).join('');
+  const curStatus = r.status === 'available' ? 'available' : 'maintenance';
+  const stBtns = ['available', 'maintenance'].map(s =>
+    `<button class="chip ${curStatus === s ? 'active' : ''}" data-setst="${s}">${s[0].toUpperCase() + s.slice(1)}</button>`).join('');
   // Managers may delete rooms in their own property when the room has no
   // work orders or history (enforced by RLS too). Hide the button when the
   // client can see the room has history; admins keep unconditional delete.
@@ -346,7 +345,7 @@ function openRoomModal(roomId) {
       <button class="btn-primary" id="room-save">Save</button>
     </div>
     ${(isAdmin() || !hasHistory) ? '<button class="btn-secondary btn-danger" id="room-del" style="width:100%;margin-top:10px">Delete room</button>' : ''}`);
-  let newStatus = r.status;
+  let newStatus = curStatus;
   document.querySelectorAll('[data-setst]').forEach(b => b.onclick = () => {
     newStatus = b.dataset.setst;
     document.querySelectorAll('[data-setst]').forEach(x => x.classList.toggle('active', x === b));
@@ -497,7 +496,7 @@ async function saveRoomList(pid) {
 
 /* ---------- REPORT ROOM DOWN ---------- */
 /* One simple form: date, room, why, expected return, who's fixing it.
-   Creates a work order AND marks the room unavailable, plus a history entry. */
+   Creates a work order AND marks the room maintenance (down), plus a history entry. */
 function openReportDown() {
   const admin = canPickProp();
   const propField = admin
@@ -572,7 +571,7 @@ function openReportDown() {
         ({ error: oerr } = await client.from('work_orders').insert(row2));
       }
       if (oerr) { alert(oerr.message); return; }
-      const { error: rerr } = await client.from('rooms').update({ status: 'unavailable' }).eq('id', rid);
+      const { error: rerr } = await client.from('rooms').update({ status: 'maintenance' }).eq('id', rid);
       if (rerr) { alert(rerr.message); return; }
       await logHistory({ property_id: pid, room_id: rid, room_number: rm.room_number,
         event_type: 'room_down', details: `Room reported down on ${when}: ${reason}${who ? ' — ' + who + ' on it' : ''}${ret ? ' — expected back ' + ret : ''}${photoNote}` });
@@ -845,17 +844,7 @@ function bindView() {
   const fs = $('f-search'); if (fs) fs.oninput = () => { f.roomSearch = fs.value; render(); if ($('f-search')) { $('f-search').focus(); $('f-search').setSelectionRange(999, 999); } };
   document.querySelectorAll('[data-rs]').forEach(b => b.onclick = () => { f.roomStatus = b.dataset.rs; render(); });
   document.querySelectorAll('.room-row').forEach(r => r.onclick = e => {
-    if (e.target.closest('[data-avail]')) return;
     openRoomModal(r.dataset.room);
-  });
-  document.querySelectorAll('[data-avail]').forEach(b => b.onclick = async e => {
-    e.stopPropagation();
-    const r = rooms.find(x => x.id === b.dataset.avail);
-    const { error } = await client.from('rooms').update({ status: 'available' }).eq('id', r.id);
-    if (error) { alert(error.message); return; }
-    await logHistory({ property_id: r.property_id, room_id: r.id, room_number: r.room_number,
-      event_type: 'status_change', details: `Status changed from ${r.status} to available` });
-    await loadAll();
   });
   const arb = $('add-room-btn'); if (arb) arb.onclick = openAddRoom;
   const frb = $('fix-rooms-btn'); if (frb) frb.onclick = openFixRooms;
