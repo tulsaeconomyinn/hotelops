@@ -248,7 +248,7 @@ function render() {
   const c = $('tab-content');
   if (currentTab === 'overview') c.innerHTML = viewOverview();
   else if (currentTab === 'rooms') c.innerHTML = viewRooms();
-  else if (currentTab === 'orders') c.innerHTML = viewOrders();
+  else if (currentTab === 'orders') c.innerHTML = viewRooms();
   else if (currentTab === 'team') c.innerHTML = viewTeam();
   else if (currentTab === 'history') c.innerHTML = viewHistory();
   bindView();
@@ -321,7 +321,7 @@ function viewRooms() {
   }).join('');
   const table = list.length ? `<div class="table-wrap"><table class="rooms-table"><thead><tr><th>Room</th><th>Status</th><th>Reason for Down</th><th>Due Date</th><th>Assigned To</th></tr></thead><tbody>${rows}</tbody></table></div>` : '<div class="empty">No rooms match. Add rooms to get started.</div>';
   return `
-    <div class="section-head"><h2>Rooms</h2><div style="display:flex;gap:8px"><button class="btn-secondary btn-small" id="fix-rooms-btn">Fix room list</button><button class="btn-secondary btn-small" id="add-room-btn">+ Add room</button></div></div>
+    <div class="section-head"><h2>Rooms Status</h2><div style="display:flex;gap:8px"><button class="btn-secondary btn-small" id="new-order-btn">+ New order</button><button class="btn-secondary btn-small" id="fix-rooms-btn">Fix room list</button><button class="btn-secondary btn-small" id="add-room-btn">+ Add room</button></div></div>
     <div class="filter-bar">${propSel}
     <input type="search" id="f-search" placeholder="Search room #" value="${esc(f.roomSearch)}"></div>
     <div class="chips">${chips}</div>
@@ -339,18 +339,44 @@ function openRoomModal(roomId) {
   // work orders or history (enforced by RLS too). Hide the button when the
   // client can see the room has history; admins keep unconditional delete.
   const hasHistory = orders.some(o => o.room_id === r.id) || historyRows.some(h => h.room_id === r.id);
+  // Open work orders for this room, with Start / Complete right here (the
+  // Orders tab was removed at Sajan's request — its actions live here now).
+  const roomOrders = orders.filter(o => o.room_id === r.id && o.status !== 'completed')
+    .sort((a, b) => (isOverdue(b) - isOverdue(a)) || (b.created_at < a.created_at ? -1 : 1));
+  const orderSection = roomOrders.length ? `
+    <label>Open work order${roomOrders.length > 1 ? 's' : ''}</label>
+    ${roomOrders.map(o => `
+    <div class="modal-order">
+      <div class="order-title" style="font-size:14px">${esc(o.title)} ${isOverdue(o) ? '<span class="badge overdue">OVERDUE</span>' : ''}</div>
+      <div class="order-meta">👤 ${esc(o.assigned_to || 'Unassigned')}${o.expected_return_date ? ' · 📅 Due: ' + esc(fmtDue(o.expected_return_date)) : ''} · <span class="badge ${o.status}">${o.status.replace('_', ' ')}</span></div>
+      ${o.description ? `<div style="font-size:13px;color:#475569">${esc(o.description)}</div>` : ''}
+      ${o.photo_path ? `<img class="order-thumb" data-photo="${esc(o.photo_path)}" style="display:none" alt="Work order photo">` : ''}
+      <div class="order-actions">
+        ${o.status === 'open' ? `<button class="btn-secondary btn-small" data-mstart="${o.id}">Start →</button>` : ''}
+        ${o.status === 'in_progress' ? `<button class="btn-primary btn-small" data-mcomplete="${o.id}">Complete ✓</button>` : ''}
+      </div>
+    </div>`).join('')}` : '';
   openModal(`
     <h3>Room ${esc(r.room_number)} <small style="color:#64748b">· ${esc(propName(r.property_id))}</small></h3>
     <label>Room number<input id="room-num" value="${esc(r.room_number)}" autocomplete="off"></label>
     <label>Status</label>
     <div class="status-btns">${stBtns}</div>
     <label>Notes<textarea id="room-notes" placeholder="e.g. waiting on parts…">${esc(r.notes || '')}</textarea></label>
+    ${orderSection}
     <div class="modal-actions">
       <button class="btn-secondary" onclick="closeModal()">Cancel</button>
       <button class="btn-primary" id="room-save">Save</button>
     </div>
     ${(isAdmin() || !hasHistory) ? '<button class="btn-secondary btn-danger" id="room-del" style="width:100%;margin-top:10px">Delete room</button>' : ''}`);
   let newStatus = curStatus;
+  document.querySelectorAll('[data-mstart]').forEach(b => b.onclick = async () => { const id = b.dataset.mstart; closeModal(); await moveOrder(id, 'in_progress'); });
+  document.querySelectorAll('[data-mcomplete]').forEach(b => b.onclick = () => openCompleteOrder(b.dataset.mcomplete));
+  document.querySelectorAll('.modal-order img[data-photo]').forEach(async img => {
+    const url = await signedPhotoUrl(img.dataset.photo);
+    if (!url) return;
+    img.src = url; img.style.display = '';
+    img.onclick = e => { e.stopPropagation(); openPhotoModal(url); };
+  });
   document.querySelectorAll('[data-setst]').forEach(b => b.onclick = () => {
     newStatus = b.dataset.setst;
     document.querySelectorAll('[data-setst]').forEach(x => x.classList.toggle('active', x === b));
@@ -852,6 +878,7 @@ function bindView() {
     openRoomModal(r.dataset.room);
   });
   const arb = $('add-room-btn'); if (arb) arb.onclick = openAddRoom;
+  const nob = $('new-order-btn'); if (nob) nob.onclick = openNewOrder;
   const frb = $('fix-rooms-btn'); if (frb) frb.onclick = openFixRooms;
   const rdb = $('report-down-btn'); if (rdb) rdb.onclick = openReportDown;
   const fabr = $('fab-room'); if (fabr) fabr.onclick = openAddRoom;
@@ -867,8 +894,7 @@ function bindView() {
     img.onclick = e => { e.stopPropagation(); openPhotoModal(url); };
   });
   document.querySelectorAll('.team-row').forEach(r => r.onclick = () => {
-    f.orderStatus = 'all'; f.orderProperty = 'all'; switchTab('orders');
-    // highlight this person's orders via alert-free approach: filter not implemented per-person, show all
+    switchTab('rooms');
   });
   const amc = $('am-create'); if (amc) amc.onclick = createManagerAccount;
   const fhp = $('f-histprop'); if (fhp) fhp.onchange = () => { f.histProperty = fhp.value; render(); };
