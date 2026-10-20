@@ -304,23 +304,28 @@ function viewRooms() {
   // sort: non-available first, then room number
   list.sort((a, b) => (a.status === 'available') - (b.status === 'available') || a.room_number.localeCompare(b.room_number, undefined, { numeric: true }));
   const rows = list.map(r => {
-    // For a down room, surface its open work order's key facts right on the
-    // row: date entered, date due back, and who is working on it.
-    const oo = r.status !== 'available' ? orders.find(o => o.room_id === r.id && o.status !== 'completed') : null;
-    const downMeta = oo ? `<div class="room-down-meta">${oo.title ? '🔧 ' + esc(oo.title) + ' · ' : ''}In: ${fmtDate(oo.created_at)} · Due: ${oo.expected_return_date ? `<span class="${isOverdue(oo) ? 'due-od' : ''}">${fmtDue(oo.expected_return_date)}${isOverdue(oo) ? ' ⚠️' : ''}</span>` : '—'} · 👤 ${esc(oo.assigned_to || 'Unassigned')}</div>` : '';
+    // Table layout: aligned columns. Under the hotel name, only the date
+    // the down entry was created; reason / due / assignee get own columns.
     const down = r.status !== 'available';
+    const oo = down ? orders.find(o => o.room_id === r.id && o.status !== 'completed') : null;
+    const inLine = oo ? `<div class="room-in">In: ${fmtDate(oo.created_at)}</div>` : '';
+    const dueCell = !oo ? '—' : (oo.expected_return_date ? `<span class="${isOverdue(oo) ? 'due-od' : ''}">${fmtDue(oo.expected_return_date)}${isOverdue(oo) ? ' ⚠️' : ''}</span>` : '—');
     return `
-    <div class="room-row" data-room="${r.id}">
-      <div><div class="room-num">Room ${esc(r.room_number)}</div><div class="room-prop">${esc(propName(r.property_id))}</div>${downMeta}</div>
-      <div><span class="badge ${down ? 'maintenance' : 'available'}">${down ? 'maintenance' : 'available'}</span></div>
-    </div>`;
+    <tr class="room-trow" data-room="${r.id}">
+      <td><div class="room-num">Room ${esc(r.room_number)}</div><div class="room-prop">${esc(propName(r.property_id))}</div>${inLine}</td>
+      <td><span class="badge ${down ? 'maintenance' : 'available'}">${down ? 'maintenance' : 'available'}</span></td>
+      <td class="rt-reason">${oo && oo.title ? esc(oo.title) : '—'}</td>
+      <td>${dueCell}</td>
+      <td>${oo ? esc(oo.assigned_to || 'Unassigned') : '—'}</td>
+    </tr>`;
   }).join('');
+  const table = list.length ? `<div class="table-wrap"><table class="rooms-table"><thead><tr><th>Room</th><th>Status</th><th>Reason for Down</th><th>Due Date</th><th>Assigned To</th></tr></thead><tbody>${rows}</tbody></table></div>` : '<div class="empty">No rooms match. Add rooms to get started.</div>';
   return `
     <div class="section-head"><h2>Rooms</h2><div style="display:flex;gap:8px"><button class="btn-secondary btn-small" id="fix-rooms-btn">Fix room list</button><button class="btn-secondary btn-small" id="add-room-btn">+ Add room</button></div></div>
     <div class="filter-bar">${propSel}
     <input type="search" id="f-search" placeholder="Search room #" value="${esc(f.roomSearch)}"></div>
     <div class="chips">${chips}</div>
-    ${rows || '<div class="empty">No rooms match. Add rooms to get started.</div>'}
+    ${table}
     <button class="fab" id="fab-room">+</button>`;
 }
 
@@ -843,7 +848,7 @@ function bindView() {
   const fp = $('f-property'); if (fp) fp.onchange = () => { f.property = fp.value; render(); };
   const fs = $('f-search'); if (fs) fs.oninput = () => { f.roomSearch = fs.value; render(); if ($('f-search')) { $('f-search').focus(); $('f-search').setSelectionRange(999, 999); } };
   document.querySelectorAll('[data-rs]').forEach(b => b.onclick = () => { f.roomStatus = b.dataset.rs; render(); });
-  document.querySelectorAll('.room-row').forEach(r => r.onclick = e => {
+  document.querySelectorAll('.room-trow').forEach(r => r.onclick = e => {
     openRoomModal(r.dataset.room);
   });
   const arb = $('add-room-btn'); if (arb) arb.onclick = openAddRoom;

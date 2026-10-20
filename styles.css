@@ -164,6 +164,18 @@ body {
 .room-prop { font-size: 12px; color: #6b7280; }
 .room-down-meta { font-size: 12px; color: #6b7280; margin-top: 2px; }
 .room-down-meta .due-od { color: #dc2626; font-weight: 700; }
+
+/* ROOMS TABLE */
+.table-wrap { overflow-x: auto; background: #fff; border: 1px solid #e5e7eb; border-radius: 14px; box-shadow: 0 1px 2px rgba(0,0,0,.04); }
+.rooms-table { width: 100%; border-collapse: collapse; font-size: 13px; min-width: 540px; }
+.rooms-table th { text-align: left; font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: #6b7280; padding: 10px 12px; border-bottom: 1px solid #e5e7eb; white-space: nowrap; }
+.rooms-table td { padding: 10px 12px; border-bottom: 1px solid #f3f4f6; vertical-align: top; }
+.rooms-table tbody tr { cursor: pointer; }
+.rooms-table tbody tr:last-child td { border-bottom: none; }
+.rooms-table tbody tr:active { background: #f9fafb; }
+.room-in { font-size: 12px; color: #6b7280; margin-top: 2px; }
+.rooms-table .due-od { color: #dc2626; font-weight: 700; }
+.rt-reason { max-width: 240px; }
 .badge {
   display: inline-flex; align-items: center; gap: 6px; padding: 5px 11px; border-radius: 20px;
   font-size: 12px; font-weight: 700;
@@ -276,7 +288,11 @@ body {
   }
   .room-row:active, .team-row:active, .prop-card:active { background: #1A2822; }
   .prop-name, .room-num, .order-title, .team-name, .hist-room, .kpi-num { color: #fff; }
-  .prop-addr, .room-prop, .room-down-meta, .order-meta, .hist-details, .prop-sub { color: #9DB0A6; }
+  .prop-addr, .room-prop, .room-down-meta, .order-meta, .hist-details, .prop-sub, .room-in { color: #9DB0A6; }
+  .table-wrap { background: #14201B; border-color: #223028; box-shadow: none; }
+  .rooms-table th { color: #8FA39B; border-bottom-color: #223028; }
+  .rooms-table td { border-bottom-color: #1E2D27; }
+  .rooms-table tbody tr:active { background: #1A2822; }
   .kpi-label { color: #8FA39B; }
   .kpi-cap, .hist-time, .hist-by { color: #6B7F76; }
   .kpi-num.good { color: #4ADE80; }
