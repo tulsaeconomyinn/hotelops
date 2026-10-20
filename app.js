@@ -249,7 +249,7 @@ function viewOverview() {
   const kpis = `
     <div class="kpi-grid">
       <div class="kpi-card"><div class="kpi-label">Total rooms</div><div class="kpi-num">${total}</div><div class="kpi-cap">${isAdmin() ? 'Across ' + properties.length + ' properties' : esc(propName(scopedProp()))}</div></div>
-      <div class="kpi-card"><div class="kpi-label">Available</div><div class="kpi-num good">${avail}</div><div class="kpi-cap">${total ? Math.round(avail / total * 100) : 0}% ready to sell</div></div>
+      <div class="kpi-card"><div class="kpi-label">Available</div><div class="kpi-num good">${avail}</div><div class="kpi-cap">${total ? Math.floor(avail / total * 100) : 0}% ready to sell</div></div>
       <div class="kpi-card"><div class="kpi-label">Out of service</div><div class="kpi-num ${out ? 'warn' : ''}">${out}</div><div class="kpi-cap">Needs work</div></div>
       <div class="kpi-card"><div class="kpi-label">Open orders</div><div class="kpi-num ${od ? 'bad' : ''}">${openOrders}</div><div class="kpi-cap">${od ? od + ' overdue' : 'All on track'}</div></div>
     </div>`;
