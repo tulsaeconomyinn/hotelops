@@ -162,13 +162,15 @@ body {
 .room-row:active { background: #f9fafb; }
 .room-num { font-weight: 800; font-size: 16px; }
 .room-prop { font-size: 12px; color: #6b7280; }
+.room-down-meta { font-size: 12px; color: #6b7280; margin-top: 2px; }
+.room-down-meta .due-od { color: #dc2626; font-weight: 700; }
 .badge {
   display: inline-flex; align-items: center; gap: 6px; padding: 5px 11px; border-radius: 20px;
   font-size: 12px; font-weight: 700;
 }
 .badge::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
 .badge.available { background: #EAF4EE; color: #1E5B44; }
-.badge.unavailable { background: #f3f4f6; color: #4b5563; }
+.badge.unavailable { background: #fee2e2; color: #b91c1c; }
 .badge.maintenance { background: #fee2e2; color: #b91c1c; }
 .badge.open { background: #EAF4EE; color: #1E5B44; }
 .badge.in_progress { background: #fef3c7; color: #b45309; }
@@ -274,7 +276,7 @@ body {
   }
   .room-row:active, .team-row:active, .prop-card:active { background: #1A2822; }
   .prop-name, .room-num, .order-title, .team-name, .hist-room, .kpi-num { color: #fff; }
-  .prop-addr, .room-prop, .order-meta, .hist-details, .prop-sub { color: #9DB0A6; }
+  .prop-addr, .room-prop, .room-down-meta, .order-meta, .hist-details, .prop-sub { color: #9DB0A6; }
   .kpi-label { color: #8FA39B; }
   .kpi-cap, .hist-time, .hist-by { color: #6B7F76; }
   .kpi-num.good { color: #4ADE80; }
@@ -291,8 +293,8 @@ body {
     background: #14201B; border-color: #2A3B33; color: #EDEFF0;
   }
   .badge.available, .badge.open, .badge.completed, .badge.medium { background: rgba(74,222,128,.14); color: #4ADE80; }
-  .badge.unavailable, .badge.low { background: #223028; color: #9DB0A6; }
-  .badge.maintenance, .badge.urgent { background: rgba(248,113,113,.14); color: #F87171; }
+  .badge.low { background: #223028; color: #9DB0A6; }
+  .badge.maintenance, .badge.urgent, .badge.unavailable { background: rgba(248,113,113,.14); color: #F87171; }
   .badge.in_progress, .badge.high { background: rgba(251,191,36,.14); color: #FBBF24; }
   .pbar { background: #223028; }
   .pbar-fill { background: #4ADE80; }

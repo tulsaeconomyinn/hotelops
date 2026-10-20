@@ -31,6 +31,8 @@ const isOverdue = o => o.expected_return_date && o.expected_return_date < todayI
 const propName = id => { const p = properties.find(p => p.id === id); return p ? p.name : '—'; };
 const roomLabel = o => { const r = rooms.find(r => r.id === o.room_id); return r ? 'Room ' + r.room_number : ''; };
 const fmtDateTime = ts => { try { return new Date(ts).toLocaleString([], {month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}); } catch(e){ return ''; } };
+const fmtDate = ts => { try { return new Date(ts).toLocaleDateString([], {month:'short',day:'numeric'}); } catch(e){ return ''; } };
+const fmtDue = d => { try { const p = String(d).split('-').map(Number); return new Date(p[0], p[1]-1, p[2]).toLocaleDateString([], {month:'short',day:'numeric'}); } catch(e){ return String(d || ''); } };
 const fmtMoney = n => '$' + (Number(n) || 0).toLocaleString([], { maximumFractionDigits: 2 });
 
 /* ---------- PHOTOS (Supabase Storage, bucket 'work-order-photos') ---------- */
@@ -303,12 +305,18 @@ function viewRooms() {
     (!f.roomSearch || r.room_number.toLowerCase().includes(f.roomSearch.toLowerCase())));
   // sort: non-available first, then room number
   list.sort((a, b) => (a.status === 'available') - (b.status === 'available') || a.room_number.localeCompare(b.room_number, undefined, { numeric: true }));
-  const rows = list.map(r => `
+  const rows = list.map(r => {
+    // For a down room, surface its open work order's key facts right on the
+    // row: date entered, date due back, and who is working on it.
+    const oo = r.status !== 'available' ? orders.find(o => o.room_id === r.id && o.status !== 'completed') : null;
+    const downMeta = oo ? `<div class="room-down-meta">In: ${fmtDate(oo.created_at)} · Due: ${oo.expected_return_date ? `<span class="${isOverdue(oo) ? 'due-od' : ''}">${fmtDue(oo.expected_return_date)}${isOverdue(oo) ? ' ⚠️' : ''}</span>` : '—'} · 👤 ${esc(oo.assigned_to || 'Unassigned')}</div>` : '';
+    return `
     <div class="room-row" data-room="${r.id}">
-      <div><div class="room-num">Room ${esc(r.room_number)}</div><div class="room-prop">${esc(propName(r.property_id))}</div></div>
+      <div><div class="room-num">Room ${esc(r.room_number)}</div><div class="room-prop">${esc(propName(r.property_id))}</div>${downMeta}</div>
       <div><span class="badge ${r.status}">${r.status.replace('_', ' ')}</span>
       ${r.status !== 'available' ? `<button class="btn-secondary btn-small quick-avail" data-avail="${r.id}">✓ Available</button>` : ''}</div>
-    </div>`).join('');
+    </div>`;
+  }).join('');
   return `
     <div class="section-head"><h2>Rooms</h2><div style="display:flex;gap:8px"><button class="btn-secondary btn-small" id="fix-rooms-btn">Fix room list</button><button class="btn-secondary btn-small" id="add-room-btn">+ Add room</button></div></div>
     <div class="filter-bar">${propSel}
