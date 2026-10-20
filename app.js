@@ -8,10 +8,21 @@ let properties = [], rooms = [], orders = [], historyRows = [];
 let currentTab = 'overview';
 let f = { property: 'all', roomStatus: 'all', roomSearch: '', orderStatus: 'open', orderProperty: 'all', histProperty: 'all', histSearch: '' };
 /* Per-user scoping: profile.property_id NULL (or role 'admin') = all-properties admin.
-   Managers/staff with a property_id are locked to that one property. */
+   Managers/staff are assigned one or more hotels (profiles.property_ids, with
+   property_id kept as the primary). One hotel -> locked to it; several -> they
+   can switch between their own hotels. RLS enforces the set server-side, and
+   the loaded `properties` array is already limited to what they may see. */
 let profile = null;
 const isAdmin = () => !!profile && (profile.role === 'admin' || !profile.property_id);
-const scopedProp = () => (isAdmin() ? null : profile.property_id);
+const myPropIds = () => {
+  if (!profile) return [];
+  if (Array.isArray(profile.property_ids) && profile.property_ids.length) return profile.property_ids;
+  return profile.property_id ? [profile.property_id] : [];
+};
+const scopedProp = () => { const ids = myPropIds(); return (!isAdmin() && ids.length === 1) ? ids[0] : null; };
+const multiProp = () => !isAdmin() && myPropIds().length > 1;
+const canPickProp = () => isAdmin() || multiProp();
+const allPropsLabel = () => isAdmin() ? 'All properties' : 'All my hotels';
 
 const $ = id => document.getElementById(id);
 const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -65,7 +76,7 @@ function repairSpendSection() {
     o.completed_at.slice(0, 7) === ym && (Number(o.cost) || 0) > 0);
   const total = done.reduce((s, o) => s + (Number(o.cost) || 0), 0);
   if (!total) return '';
-  const props = isAdmin() ? properties : properties.filter(p => p.id === scopedProp());
+  const props = properties; // RLS already limits this to the viewer's hotels
   const rows = props.map(p => {
     const sum = done.filter(o => o.property_id === p.id).reduce((s, o) => s + (Number(o.cost) || 0), 0);
     return sum ? `<div class="spend-row"><span>${esc(p.name)}</span><strong>${fmtMoney(sum)}</strong></div>` : '';
@@ -149,7 +160,7 @@ async function enterApp(email, userId) {
   userEmail = email;
   // Fetch the user's profile: role + property decides what they can see.
   const { data: prof } = await client.from('profiles')
-    .select('role, property_id').eq('id', userId).single();
+    .select('role, property_id, property_ids').eq('id', userId).single();
   if (!prof) {
     // No profile row -> RLS would show nothing. Fail closed with a clear message.
     await client.auth.signOut();
@@ -161,9 +172,10 @@ async function enterApp(email, userId) {
     return;
   }
   profile = prof;
-  if (!isAdmin()) {
-    // Lock every property filter to the manager's own hotel.
-    f.property = f.orderProperty = f.histProperty = profile.property_id;
+  if (!isAdmin() && scopedProp()) {
+    // Single-hotel login: lock every property filter to their hotel.
+    // Multi-hotel logins keep 'all', which means all of THEIR hotels.
+    f.property = f.orderProperty = f.histProperty = scopedProp();
   }
   $('login-view').classList.add('hidden');
   $('app-view').classList.remove('hidden');
@@ -206,9 +218,11 @@ async function loadAll() {
   const ht = $('header-title');
   if (ht) {
     if (isAdmin()) ht.textContent = '🏨 HotelOps';
-    else {
+    else if (scopedProp()) {
       const sp = properties.find(p => p.id === scopedProp());
       ht.innerHTML = '🏨 HotelOps <span class="header-prop">· ' + esc(sp ? sp.name : '') + '</span>';
+    } else {
+      ht.innerHTML = '🏨 HotelOps <span class="header-prop">· My hotels</span>';
     }
   }
   render();
@@ -248,12 +262,12 @@ function viewOverview() {
   const od = orders.filter(o => isOverdue(o)).length;
   const kpis = `
     <div class="kpi-grid">
-      <div class="kpi-card"><div class="kpi-label">Total rooms</div><div class="kpi-num">${total}</div><div class="kpi-cap">${isAdmin() ? 'Across ' + properties.length + ' properties' : esc(propName(scopedProp()))}</div></div>
+      <div class="kpi-card"><div class="kpi-label">Total rooms</div><div class="kpi-num">${total}</div><div class="kpi-cap">${properties.length > 1 ? 'Across ' + properties.length + ' properties' : esc(propName(scopedProp()))}</div></div>
       <div class="kpi-card"><div class="kpi-label">Available</div><div class="kpi-num good">${avail}</div><div class="kpi-cap">${total ? Math.floor(avail / total * 100) : 0}% ready to sell</div></div>
       <div class="kpi-card"><div class="kpi-label">Out of service</div><div class="kpi-num ${out ? 'warn' : ''}">${out}</div><div class="kpi-cap">Needs work</div></div>
       <div class="kpi-card"><div class="kpi-label">Open orders</div><div class="kpi-num ${od ? 'bad' : ''}">${openOrders}</div><div class="kpi-cap">${od ? od + ' overdue' : 'All on track'}</div></div>
     </div>`;
-  const headName = isAdmin() ? 'Portfolio' : esc(propName(scopedProp()));
+  const headName = isAdmin() ? 'Portfolio' : (scopedProp() ? esc(propName(scopedProp())) : 'My hotels');
   return `<div class="section-head"><h2>${headName}</h2></div>
     <button class="btn-primary report-down-btn" id="report-down-btn">🚨 Report room down</button>` + kpis + repairSpendSection() + properties.map(p => {
     const pr = rooms.filter(r => r.property_id === p.id);
@@ -278,8 +292,8 @@ function viewOverview() {
 
 /* ---------- ROOMS ---------- */
 function viewRooms() {
-  const propSel = isAdmin()
-    ? `<select id="f-property">${['<option value="all">All properties</option>'].concat(properties.map(p => `<option value="${p.id}" ${f.property === p.id ? 'selected' : ''}>${esc(p.name)}</option>`)).join('')}</select>`
+  const propSel = canPickProp()
+    ? `<select id="f-property">${['<option value="all">' + allPropsLabel() + '</option>'].concat(properties.map(p => `<option value="${p.id}" ${f.property === p.id ? 'selected' : ''}>${esc(p.name)}</option>`)).join('')}</select>`
     : '';
   const chips = ['all', 'available', 'unavailable', 'maintenance'].map(s =>
     `<button class="chip ${f.roomStatus === s ? 'active' : ''}" data-rs="${s}">${s === 'all' ? 'All' : s[0].toUpperCase() + s.slice(1)}</button>`).join('');
@@ -357,7 +371,7 @@ function openRoomModal(roomId) {
 }
 
 function openAddRoom() {
-  const admin = isAdmin();
+  const admin = canPickProp();
   const propField = admin
     ? `<label>Property<select id="nr-prop">${properties.map(p => `<option value="${p.id}">${esc(p.name)}</option>`).join('')}</select></label>`
     : '';
@@ -384,7 +398,7 @@ function openAddRoom() {
    Save adds rooms that are new and deletes rooms that were removed;
    rooms with work history can't be deleted (RLS) and are reported back. */
 function openFixRooms() {
-  if (isAdmin() && (!f.property || f.property === 'all')) {
+  if (canPickProp() && (!f.property || f.property === 'all')) {
     // Admin with no property selected: ask which hotel first.
     openModal(`
       <h3>Fix room list</h3>
@@ -397,7 +411,7 @@ function openFixRooms() {
     $('frl-pick').onclick = () => openFixRoomsModal($('frl-prop').value);
     return;
   }
-  openFixRoomsModal(isAdmin() ? f.property : scopedProp());
+  openFixRoomsModal(canPickProp() ? f.property : scopedProp());
 }
 
 function openFixRoomsModal(pid) {
@@ -477,7 +491,7 @@ async function saveRoomList(pid) {
 /* One simple form: date, room, why, expected return, who's fixing it.
    Creates a work order AND marks the room unavailable, plus a history entry. */
 function openReportDown() {
-  const admin = isAdmin();
+  const admin = canPickProp();
   const propField = admin
     ? `<label>Property<select id="rd-prop">${properties.map(p => `<option value="${p.id}">${esc(p.name)}</option>`).join('')}</select></label>`
     : `<div class="static-prop">${esc(propName(scopedProp()))}</div>`;
@@ -564,8 +578,8 @@ function openReportDown() {
 
 /* ---------- WORK ORDERS ---------- */
 function viewOrders() {
-  const propSel = isAdmin()
-    ? `<select id="f-orderprop">${['<option value="all">All properties</option>'].concat(properties.map(p => `<option value="${p.id}" ${f.orderProperty === p.id ? 'selected' : ''}>${esc(p.name)}</option>`)).join('')}</select>`
+  const propSel = canPickProp()
+    ? `<select id="f-orderprop">${['<option value="all">' + allPropsLabel() + '</option>'].concat(properties.map(p => `<option value="${p.id}" ${f.orderProperty === p.id ? 'selected' : ''}>${esc(p.name)}</option>`)).join('')}</select>`
     : '';
   const chips = [['open', 'Open'], ['in_progress', 'In Progress'], ['completed', 'Done'], ['all', 'All']].map(([v, l]) =>
     `<button class="chip ${f.orderStatus === v ? 'active' : ''}" data-os="${v}">${l}</button>`).join('');
@@ -595,7 +609,7 @@ function viewOrders() {
 }
 
 function openNewOrder() {
-  const admin = isAdmin();
+  const admin = canPickProp();
   const propField = admin
     ? `<label>Property<select id="no-prop">${properties.map(p => `<option value="${p.id}">${esc(p.name)}</option>`).join('')}</select></label>`
     : `<div class="static-prop">${esc(propName(scopedProp()))}</div>`;
@@ -709,10 +723,11 @@ function addManagerSection() {
   if (!isAdmin()) return '';
   return `<div class="card am-card">
     <h3 style="margin:0 0 6px;font-size:17px;font-weight:800">Add manager</h3>
-    <p style="font-size:13px;color:#64748b;margin:0 0 12px">Creates their login, assigns their hotel, and emails them the sign-in details automatically.</p>
+    <p style="font-size:13px;color:#64748b;margin:0 0 12px">Creates their login, assigns their hotel(s), and emails them the sign-in details automatically.</p>
     <label>Email<input type="email" id="am-email" placeholder="manager@example.com" autocomplete="off"></label>
     <label>Full name<input id="am-name" placeholder="e.g. Jordan Lee" autocomplete="off"></label>
-    <label>Assigned hotel<select id="am-prop">${properties.map(p => `<option value="${p.id}">${esc(p.name)}</option>`).join('')}</select></label>
+    <label>Assigned hotel(s) — tick all that apply</label>
+    <div class="am-props">${properties.map(p => `<label class="check-row"><input type="checkbox" class="am-prop-check" value="${p.id}"> ${esc(p.name)}</label>`).join('')}</div>
     <button class="btn-primary" id="am-create">Create account &amp; send login</button>
     <div id="am-error" class="error-box hidden" style="margin-top:12px;margin-bottom:0"></div>
     <div id="am-result" class="hidden" style="margin-top:12px"></div>
@@ -722,11 +737,11 @@ function addManagerSection() {
 async function createManagerAccount() {
   const email = $('am-email').value.trim();
   const name = $('am-name').value.trim();
-  const propertyId = $('am-prop').value;
+  const propertyIds = [...document.querySelectorAll('.am-prop-check:checked')].map(c => c.value);
   const errBox = $('am-error'), resBox = $('am-result');
   errBox.classList.add('hidden'); resBox.classList.add('hidden'); resBox.innerHTML = '';
   if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { errBox.textContent = 'Enter a valid email address.'; errBox.classList.remove('hidden'); return; }
-  if (!propertyId) { errBox.textContent = 'Pick the hotel they manage.'; errBox.classList.remove('hidden'); return; }
+  if (!propertyIds.length) { errBox.textContent = 'Tick at least one hotel for them.'; errBox.classList.remove('hidden'); return; }
   const btn = $('am-create');
   btn.textContent = 'Creating…'; btn.disabled = true;
   try {
@@ -735,7 +750,7 @@ async function createManagerAccount() {
     const resp = await fetch(SUPABASE_URL + '/functions/v1/create-manager', {
       method: 'POST',
       headers: { 'Authorization': 'Bearer ' + session.access_token, 'apikey': SUPABASE_ANON_KEY, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email, name, property_id: propertyId })
+      body: JSON.stringify({ email, name, property_ids: propertyIds })
     });
     const out = await resp.json();
     if (!out.ok) { errBox.textContent = out.error || 'Something went wrong.'; errBox.classList.remove('hidden'); return; }
@@ -756,7 +771,7 @@ async function createManagerAccount() {
         document.body.removeChild(ta);
       }
     };
-    $('am-email').value = ''; $('am-name').value = '';
+    $('am-email').value = ''; $('am-name').value = ''; document.querySelectorAll('.am-prop-check').forEach(c => { c.checked = false; });
   } catch (e) {
     errBox.textContent = 'Could not reach the server. Check your connection and try again.';
     errBox.classList.remove('hidden');
@@ -767,8 +782,8 @@ async function createManagerAccount() {
 
 /* ---------- HISTORY ---------- */
 function viewHistory() {
-  const propSel = isAdmin()
-    ? `<select id="f-histprop">${['<option value="all">All properties</option>'].concat(properties.map(p => `<option value="${p.id}" ${f.histProperty === p.id ? 'selected' : ''}>${esc(p.name)}</option>`)).join('')}</select>`
+  const propSel = canPickProp()
+    ? `<select id="f-histprop">${['<option value="all">' + allPropsLabel() + '</option>'].concat(properties.map(p => `<option value="${p.id}" ${f.histProperty === p.id ? 'selected' : ''}>${esc(p.name)}</option>`)).join('')}</select>`
     : '';
   const list = historyRows.filter(h =>
     (f.histProperty === 'all' || h.property_id === f.histProperty) &&
