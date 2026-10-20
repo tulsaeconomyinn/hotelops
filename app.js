@@ -20,6 +20,60 @@ const isOverdue = o => o.expected_return_date && o.expected_return_date < todayI
 const propName = id => { const p = properties.find(p => p.id === id); return p ? p.name : '—'; };
 const roomLabel = o => { const r = rooms.find(r => r.id === o.room_id); return r ? 'Room ' + r.room_number : ''; };
 const fmtDateTime = ts => { try { return new Date(ts).toLocaleString([], {month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}); } catch(e){ return ''; } };
+const fmtMoney = n => '$' + (Number(n) || 0).toLocaleString([], { maximumFractionDigits: 2 });
+
+/* ---------- PHOTOS (Supabase Storage, bucket 'work-order-photos') ---------- */
+/* Bucket is private; photos are shown via short-lived signed URLs.
+   Everything here fails soft: until the storage migration is applied the
+   bucket won't exist, uploads/signing just return null and the flow
+   continues without a photo. */
+const photoUrlCache = {};
+async function signedPhotoUrl(path) {
+  if (!path) return null;
+  if (photoUrlCache[path]) return photoUrlCache[path];
+  try {
+    const { data, error } = await client.storage.from('work-order-photos').createSignedUrl(path, 3600);
+    if (error || !data || !data.signedUrl) return null;
+    photoUrlCache[path] = data.signedUrl;
+    return data.signedUrl;
+  } catch (e) { return null; }
+}
+async function uploadReportPhoto(file, pid) {
+  try {
+    const ext = ((file.name || '').split('.').pop() || 'jpg').toLowerCase().replace(/[^a-z0-9]/g, '') || 'jpg';
+    const path = pid + '/tmp-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8) + '.' + ext;
+    const { error } = await client.storage.from('work-order-photos')
+      .upload(path, file, { contentType: file.type || 'image/jpeg' });
+    if (error) throw error;
+    return path;
+  } catch (e) { return null; }
+}
+function openPhotoModal(url) {
+  openModal(`
+    <div class="photo-modal"><img src="${esc(url)}" alt="Work order photo"></div>
+    <div class="modal-actions">
+      <button class="btn-secondary" onclick="closeModal()">Close</button>
+    </div>`);
+}
+
+/* ---------- REPAIR SPEND (this month, from completed orders' cost) ---------- */
+function repairSpendSection() {
+  const now = new Date();
+  const ym = now.toISOString().slice(0, 7);
+  const monthLabel = now.toLocaleString([], { month: 'long' });
+  const done = orders.filter(o => o.status === 'completed' && o.completed_at &&
+    o.completed_at.slice(0, 7) === ym && (Number(o.cost) || 0) > 0);
+  const total = done.reduce((s, o) => s + (Number(o.cost) || 0), 0);
+  if (!total) return '';
+  const props = isAdmin() ? properties : properties.filter(p => p.id === scopedProp());
+  const rows = props.map(p => {
+    const sum = done.filter(o => o.property_id === p.id).reduce((s, o) => s + (Number(o.cost) || 0), 0);
+    return sum ? `<div class="spend-row"><span>${esc(p.name)}</span><strong>${fmtMoney(sum)}</strong></div>` : '';
+  }).join('');
+  return `<div class="card spend-card"><div class="prop-name">🔧 Repair spend · ${monthLabel}</div>
+    <div class="spend-rows">${rows}</div>
+    <div class="spend-total"><span>Total</span><strong>${fmtMoney(total)}</strong></div></div>`;
+}
 
 /* ---------- AUTH ---------- */
 const APP_URL = 'https://tulsaeconomyinn.github.io/hotelops/';
@@ -201,7 +255,7 @@ function viewOverview() {
     </div>`;
   const headName = isAdmin() ? 'Portfolio' : esc(propName(scopedProp()));
   return `<div class="section-head"><h2>${headName}</h2></div>
-    <button class="btn-primary report-down-btn" id="report-down-btn">🚨 Report room down</button>` + kpis + properties.map(p => {
+    <button class="btn-primary report-down-btn" id="report-down-btn">🚨 Report room down</button>` + kpis + repairSpendSection() + properties.map(p => {
     const pr = rooms.filter(r => r.property_id === p.id);
     const pavail = pr.filter(r => r.status === 'available').length;
     const pout = pr.filter(r => r.status !== 'available').length;
@@ -242,7 +296,7 @@ function viewRooms() {
       ${r.status !== 'available' ? `<button class="btn-secondary btn-small quick-avail" data-avail="${r.id}">✓ Available</button>` : ''}</div>
     </div>`).join('');
   return `
-    <div class="section-head"><h2>Rooms</h2><button class="btn-secondary btn-small" id="add-room-btn">+ Add room</button></div>
+    <div class="section-head"><h2>Rooms</h2><div style="display:flex;gap:8px"><button class="btn-secondary btn-small" id="fix-rooms-btn">Fix room list</button><button class="btn-secondary btn-small" id="add-room-btn">+ Add room</button></div></div>
     <div class="filter-bar">${propSel}
     <input type="search" id="f-search" placeholder="Search room #" value="${esc(f.roomSearch)}"></div>
     <div class="chips">${chips}</div>
@@ -255,15 +309,21 @@ function openRoomModal(roomId) {
   if (!r) return;
   const stBtns = ['available', 'unavailable', 'maintenance'].map(s =>
     `<button class="chip ${r.status === s ? 'active' : ''}" data-setst="${s}">${s[0].toUpperCase() + s.slice(1)}</button>`).join('');
+  // Managers may delete rooms in their own property when the room has no
+  // work orders or history (enforced by RLS too). Hide the button when the
+  // client can see the room has history; admins keep unconditional delete.
+  const hasHistory = orders.some(o => o.room_id === r.id) || historyRows.some(h => h.room_id === r.id);
   openModal(`
     <h3>Room ${esc(r.room_number)} <small style="color:#64748b">· ${esc(propName(r.property_id))}</small></h3>
+    <label>Room number<input id="room-num" value="${esc(r.room_number)}" autocomplete="off"></label>
     <label>Status</label>
     <div class="status-btns">${stBtns}</div>
     <label>Notes<textarea id="room-notes" placeholder="e.g. waiting on parts…">${esc(r.notes || '')}</textarea></label>
     <div class="modal-actions">
       <button class="btn-secondary" onclick="closeModal()">Cancel</button>
       <button class="btn-primary" id="room-save">Save</button>
-    </div>`);
+    </div>
+    ${(isAdmin() || !hasHistory) ? '<button class="btn-secondary btn-danger" id="room-del" style="width:100%;margin-top:10px">Delete room</button>' : ''}`);
   let newStatus = r.status;
   document.querySelectorAll('[data-setst]').forEach(b => b.onclick = () => {
     newStatus = b.dataset.setst;
@@ -271,12 +331,27 @@ function openRoomModal(roomId) {
   });
   $('room-save').onclick = async () => {
     const notes = $('room-notes').value.trim();
-    const { error } = await client.from('rooms').update({ status: newStatus, notes: notes || null }).eq('id', r.id);
+    const newNum = $('room-num').value.trim();
+    if (!newNum) { alert('Room number cannot be empty.'); return; }
+    const { error } = await client.from('rooms').update({ status: newStatus, notes: notes || null, room_number: newNum }).eq('id', r.id);
     if (error) { alert(error.message); return; }
     if (newStatus !== r.status) {
-      await logHistory({ property_id: r.property_id, room_id: r.id, room_number: r.room_number,
+      await logHistory({ property_id: r.property_id, room_id: r.id, room_number: newNum,
         event_type: 'status_change', details: `Status changed from ${r.status} to ${newStatus}` });
     }
+    if (newNum !== r.room_number) {
+      await logHistory({ property_id: r.property_id, room_id: r.id, room_number: newNum,
+        event_type: 'room_renamed', details: `Room renumbered from ${r.room_number} to ${newNum}` });
+    }
+    closeModal(); await loadAll();
+  };
+  const rdel = $('room-del');
+  if (rdel) rdel.onclick = async () => {
+    if (!confirm(`Delete Room ${r.room_number}? Open orders keep their history but lose the room link.`)) return;
+    const { error } = await client.from('rooms').delete().eq('id', r.id);
+    if (error) { alert(error.message); return; }
+    await logHistory({ property_id: r.property_id, room_id: null, room_number: r.room_number,
+      event_type: 'room_deleted', details: `Room ${r.room_number} deleted` });
     closeModal(); await loadAll();
   };
 }
@@ -304,6 +379,100 @@ function openAddRoom() {
   };
 }
 
+/* ---------- FIX ROOM LIST (bulk editor) ----------
+   Manager edits their hotel's whole room list in one textarea.
+   Save adds rooms that are new and deletes rooms that were removed;
+   rooms with work history can't be deleted (RLS) and are reported back. */
+function openFixRooms() {
+  if (isAdmin() && (!f.property || f.property === 'all')) {
+    // Admin with no property selected: ask which hotel first.
+    openModal(`
+      <h3>Fix room list</h3>
+      <p style="font-size:13px;color:#64748b;margin:0 0 12px">Pick the hotel whose room list you want to fix.</p>
+      <label>Hotel<select id="frl-prop">${properties.map(p => `<option value="${p.id}">${esc(p.name)}</option>`).join('')}</select></label>
+      <div class="modal-actions">
+        <button class="btn-secondary" onclick="closeModal()">Cancel</button>
+        <button class="btn-primary" id="frl-pick">Continue</button>
+      </div>`);
+    $('frl-pick').onclick = () => openFixRoomsModal($('frl-prop').value);
+    return;
+  }
+  openFixRoomsModal(isAdmin() ? f.property : scopedProp());
+}
+
+function openFixRoomsModal(pid) {
+  const p = properties.find(x => x.id === pid);
+  const current = rooms
+    .filter(r => r.property_id === pid)
+    .map(r => r.room_number.trim())
+    .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+  openModal(`
+    <h3>Fix room list <small style="color:#64748b">· ${esc(p ? p.name : '')}</small></h3>
+    <p style="font-size:13px;color:#64748b;margin:0 0 8px">Edit this list to match the hotel's real room numbers — one per line. Save adds new ones and removes wrong ones (rooms with work history are kept and flagged).</p>
+    <label>Room numbers<textarea id="frl-text" rows="10" style="font-family:monospace" placeholder="101&#10;102&#10;201" autocomplete="off">${esc(current.join('\n'))}</textarea></label>
+    <div id="frl-error" class="error-box hidden" style="margin-top:10px"></div>
+    <div class="modal-actions">
+      <button class="btn-secondary" onclick="closeModal()">Cancel</button>
+      <button class="btn-primary" id="frl-save">Save list</button>
+    </div>`);
+  $('frl-save').onclick = () => saveRoomList(pid);
+}
+
+async function saveRoomList(pid) {
+  const errBox = $('frl-error');
+  errBox.classList.add('hidden');
+  // Parse: trim, drop empty lines, dedupe case-insensitively.
+  const seen = new Set();
+  const wanted = [];
+  $('frl-text').value.split('\n').forEach(line => {
+    const t = line.trim();
+    if (!t) return;
+    const k = t.toLowerCase();
+    if (seen.has(k)) return;
+    seen.add(k); wanted.push(t);
+  });
+  if (!wanted.length) {
+    errBox.textContent = 'The list is empty — nothing to save.';
+    errBox.classList.remove('hidden'); return;
+  }
+  const btn = $('frl-save');
+  btn.textContent = 'Saving…'; btn.disabled = true;
+  const cur = rooms.filter(r => r.property_id === pid);
+  const curKeys = new Map(cur.map(r => [r.room_number.trim().toLowerCase(), r]));
+  const wantedKeys = new Set(wanted.map(w => w.toLowerCase()));
+  const toAdd = wanted.filter(w => !curKeys.has(w.toLowerCase()));
+  const toRemove = cur.filter(r => !wantedKeys.has(r.room_number.trim().toLowerCase()));
+  let added = 0;
+  const removedNums = [], keptNums = [];
+  // Add the new rooms first.
+  for (const num of toAdd) {
+    const { data, error } = await client.from('rooms')
+      .insert({ property_id: pid, room_number: num, status: 'available' })
+      .select('id, room_number').single();
+    if (error) { alert('Could not add room ' + num + ': ' + error.message); break; }
+    added++;
+    await logHistory({ property_id: pid, room_id: data.id, room_number: num,
+      event_type: 'room_added', details: `Room ${num} added from Fix room list` });
+  }
+  // Remove rooms that were taken off the list. RLS blocks any room that has
+  // work orders or room history (and, until the room-delete migration runs,
+  // blocks managers entirely) — failures go to the "kept" list.
+  for (const r of toRemove) {
+    const { error } = await client.from('rooms').delete().eq('id', r.id);
+    if (error) keptNums.push(r.room_number); else removedNums.push(r.room_number);
+  }
+  await loadAll();
+  openModal(`
+    <h3>Room list updated</h3>
+    <div class="info-box" style="margin:0">
+      Added ${added} room${added === 1 ? '' : 's'}. Removed ${removedNums.length} wrong room${removedNums.length === 1 ? '' : 's'}.
+      ${keptNums.length ? `<br><br>Couldn't remove these (they have work history) — ask an admin or rename them: <strong>${esc(keptNums.join(', '))}</strong>` : ''}
+    </div>
+    <div class="modal-actions">
+      <button class="btn-primary" onclick="closeModal()">Done</button>
+    </div>`);
+}
+
 /* ---------- REPORT ROOM DOWN ---------- */
 /* One simple form: date, room, why, expected return, who's fixing it.
    Creates a work order AND marks the room unavailable, plus a history entry. */
@@ -316,45 +485,80 @@ function openReportDown() {
     <h3>🚨 Report room down</h3>
     ${propField}
     <label>Date<input type="date" id="rd-date" value="${todayISO()}"></label>
-    <label>Room<select id="rd-room"></select></label>
+    <label>Room<input id="rd-room" list="rd-room-list" placeholder="e.g. 214" autocomplete="off"><datalist id="rd-room-list"></datalist>
+    <small class="hint">Type any number — if it's not in the system you'll be asked before it's added.</small></label>
     <label>What's wrong<input id="rd-reason" placeholder="e.g. AC not cooling"></label>
     <label>Expected back<input type="date" id="rd-return"></label>
     <label>Who's working on it<input id="rd-who" placeholder="Name"></label>
+    <label>Photo (optional)<input type="file" id="rd-photo" accept="image/*" capture="environment"></label>
     <div class="modal-actions">
       <button class="btn-secondary" onclick="closeModal()">Cancel</button>
       <button class="btn-primary" id="rd-save">Report it</button>
     </div>`);
   const fillRooms = () => {
     const pid = admin ? $('rd-prop').value : scopedProp();
-    $('rd-room').innerHTML =
+    $('rd-room-list').innerHTML =
       rooms.filter(r => r.property_id === pid)
         .sort((a, b) => a.room_number.localeCompare(b.room_number, undefined, { numeric: true }))
-        .map(r => `<option value="${r.id}">Room ${esc(r.room_number)} (${r.status})</option>`).join('') ||
-      '<option value="">No rooms yet</option>';
+        .map(r => `<option value="${esc(r.room_number)}">Room ${esc(r.room_number)} (${r.status})</option>`).join('');
   };
   if (admin) $('rd-prop').onchange = fillRooms;
   fillRooms();
   $('rd-save').onclick = async () => {
     const reason = $('rd-reason').value.trim();
-    const rid = $('rd-room').value;
-    if (!rid) { alert('Pick a room.'); return; }
+    const roomNum = $('rd-room').value.trim();
+    if (!roomNum) { alert('Enter a room number.'); return; }
     if (!reason) { alert('Say what\'s wrong with the room.'); return; }
     const pid = admin ? $('rd-prop').value : scopedProp();
-    const rm = rooms.find(r => r.id === rid);
-    const when = $('rd-date').value || todayISO();
-    const ret = $('rd-return').value || null;
-    const who = $('rd-who').value.trim() || null;
-    const { error: oerr } = await client.from('work_orders').insert({
-      property_id: pid, room_id: rid, title: reason, status: 'open', priority: 'medium',
-      description: 'Reported down on ' + when + '.',
-      assigned_to: who, expected_return_date: ret, created_by: userEmail
-    });
-    if (oerr) { alert(oerr.message); return; }
-    const { error: rerr } = await client.from('rooms').update({ status: 'unavailable' }).eq('id', rid);
-    if (rerr) { alert(rerr.message); return; }
-    await logHistory({ property_id: pid, room_id: rid, room_number: rm ? rm.room_number : null,
-      event_type: 'room_down', details: `Room reported down on ${when}: ${reason}${who ? ' — ' + who + ' on it' : ''}${ret ? ' — expected back ' + ret : ''}` });
-    closeModal(); await loadAll();
+    const btn = $('rd-save'); btn.textContent = 'Reporting…'; btn.disabled = true;
+    let photoNote = '';
+    try {
+      // Self-correcting room numbers: find the typed room, or ask before creating it.
+      let rm = rooms.find(r => r.property_id === pid && r.room_number.trim() === roomNum);
+      if (!rm) {
+        if (!confirm(`Room ${roomNum} isn't in the system for this hotel. Add it as a new room?`)) {
+          btn.textContent = 'Report it'; btn.disabled = false;
+          return;
+        }
+        const { data, error } = await client.from('rooms')
+          .insert({ property_id: pid, room_number: roomNum, status: 'available' })
+          .select('id, room_number').single();
+        if (error) { alert(error.message); return; }
+        rm = data;
+        await logHistory({ property_id: pid, room_id: data.id, room_number: roomNum,
+          event_type: 'room_added', details: `Room ${roomNum} added from Report room down` });
+      }
+      const rid = rm.id;
+      const when = $('rd-date').value || todayISO();
+      const ret = $('rd-return').value || null;
+      const who = $('rd-who').value.trim() || null;
+      // Photo upload is optional and non-blocking: if the bucket isn't set up
+      // (or the upload fails) the order is still created without it.
+      let photoPath = null;
+      const file = $('rd-photo').files && $('rd-photo').files[0];
+      if (file) photoPath = await uploadReportPhoto(file, pid);
+      if (file && !photoPath) photoNote = ' (photo could not be uploaded — order saved without it)';
+      const orderRow = {
+        property_id: pid, room_id: rid, title: reason, status: 'open', priority: 'medium',
+        description: 'Reported down on ' + when + '.',
+        assigned_to: who, expected_return_date: ret, created_by: userEmail, photo_path: photoPath
+      };
+      let { error: oerr } = await client.from('work_orders').insert(orderRow);
+      if (oerr && photoPath && /photo_path/i.test(oerr.message)) {
+        // photo_path column not migrated yet — retry without it
+        const { photo_path: _drop, ...row2 } = orderRow;
+        ({ error: oerr } = await client.from('work_orders').insert(row2));
+      }
+      if (oerr) { alert(oerr.message); return; }
+      const { error: rerr } = await client.from('rooms').update({ status: 'unavailable' }).eq('id', rid);
+      if (rerr) { alert(rerr.message); return; }
+      await logHistory({ property_id: pid, room_id: rid, room_number: rm.room_number,
+        event_type: 'room_down', details: `Room reported down on ${when}: ${reason}${who ? ' — ' + who + ' on it' : ''}${ret ? ' — expected back ' + ret : ''}${photoNote}` });
+      closeModal(); await loadAll();
+      if (photoNote) alert('Room reported. Note: the photo could not be uploaded.');
+    } finally {
+      btn.textContent = 'Report it'; btn.disabled = false;
+    }
   };
 }
 
@@ -371,13 +575,15 @@ function viewOrders() {
   list.sort((a, b) => (isOverdue(b) - isOverdue(a)) || (b.created_at < a.created_at ? -1 : 1));
   const cards = list.map(o => {
     const od = isOverdue(o);
-    const next = o.status === 'open' ? ['in_progress', 'Start →'] : o.status === 'in_progress' ? ['completed', 'Complete ✓'] : null;
+    const next = o.status === 'open' ? ['in_progress', 'Start →'] : null;
     return `<div class="card order-card pri-${o.priority}">
       <div class="order-title">${esc(o.title)} ${od ? '<span class="badge overdue">OVERDUE</span>' : ''}</div>
       <div class="order-meta">${esc(propName(o.property_id))}${roomLabel(o) ? ' · ' + esc(roomLabel(o)) : ''} · <span class="badge ${o.priority}">${o.priority}</span> <span class="badge ${o.status}">${o.status.replace('_', ' ')}</span></div>
       ${o.description ? `<div style="font-size:13px;color:#475569">${esc(o.description)}</div>` : ''}
-      <div class="order-meta">👤 ${esc(o.assigned_to || 'Unassigned')}${o.expected_return_date ? ' · 📅 Expected back: ' + esc(o.expected_return_date) : ''}</div>
+      <div class="order-meta">👤 ${esc(o.assigned_to || 'Unassigned')}${o.expected_return_date ? ' · 📅 Expected back: ' + esc(o.expected_return_date) : ''}${o.cost != null && o.cost !== '' ? ' · 💰 ' + fmtMoney(o.cost) : ''}</div>
+      ${o.photo_path ? `<img class="order-thumb" data-photo="${esc(o.photo_path)}" style="display:none" alt="Work order photo">` : ''}
       ${next ? `<div class="order-actions"><button class="btn-secondary btn-small" data-move="${o.id}" data-to="${next[0]}">${next[1]}</button></div>` : ''}
+      ${o.status === 'in_progress' ? `<div class="order-actions"><button class="btn-secondary btn-small" data-complete="${o.id}">Complete ✓</button></div>` : ''}
     </div>`;
   }).join('');
   return `
@@ -435,17 +641,45 @@ function openNewOrder() {
   };
 }
 
-async function moveOrder(id, to) {
+async function moveOrder(id, to, cost) {
   const o = orders.find(x => x.id === id);
   if (!o) return;
   const patch = { status: to };
-  if (to === 'completed') patch.completed_at = new Date().toISOString();
-  const { error } = await client.from('work_orders').update(patch).eq('id', id);
+  if (to === 'completed') {
+    patch.completed_at = new Date().toISOString();
+    if (cost != null) patch.cost = cost;
+  }
+  let { error } = await client.from('work_orders').update(patch).eq('id', id);
+  if (error && cost != null && /cost/i.test(error.message)) {
+    // cost column not migrated yet — complete without it
+    delete patch.cost;
+    ({ error } = await client.from('work_orders').update(patch).eq('id', id));
+  }
   if (error) { alert(error.message); return; }
   const rm = rooms.find(r => r.id === o.room_id);
   await logHistory({ property_id: o.property_id, room_id: o.room_id, room_number: rm ? rm.room_number : null,
-    event_type: 'work_order_status', details: `Work order "${o.title}" moved to ${to.replace('_', ' ')}` });
+    event_type: 'work_order_status', details: `Work order "${o.title}" moved to ${to.replace('_', ' ')}${cost != null ? ' · cost ' + fmtMoney(cost) : ''}` });
   await loadAll();
+}
+
+function openCompleteOrder(id) {
+  const o = orders.find(x => x.id === id);
+  if (!o) return;
+  openModal(`
+    <h3>Complete work order</h3>
+    <div class="co-title">${esc(o.title)}${roomLabel(o) ? ' · ' + esc(roomLabel(o)) : ''}</div>
+    <label>Repair cost (optional)<input type="number" id="co-cost" inputmode="decimal" min="0" step="0.01" placeholder="$ 0.00"></label>
+    <div class="modal-actions">
+      <button class="btn-secondary" onclick="closeModal()">Cancel</button>
+      <button class="btn-primary" id="co-save">Complete ✓</button>
+    </div>`);
+  $('co-save').onclick = async () => {
+    const v = $('co-cost').value.trim();
+    const cost = v === '' ? null : Number(v);
+    if (v !== '' && (!isFinite(cost) || cost < 0)) { alert('Enter a valid cost, or leave it blank.'); return; }
+    closeModal();
+    await moveOrder(id, 'completed', cost);
+  };
 }
 
 /* ---------- TEAM ---------- */
@@ -570,8 +804,8 @@ function exportRooms() {
     ...rooms.map(r => [propName(r.property_id), r.room_number, r.status, r.notes || ''])]);
 }
 function exportOrders() {
-  downloadCSV('hotelops-orders.csv', [['Property', 'Room', 'Title', 'Priority', 'Status', 'Assigned to', 'Expected return', 'Created', 'Created by'],
-    ...orders.map(o => [propName(o.property_id), roomLabel(o), o.title, o.priority, o.status, o.assigned_to || '', o.expected_return_date || '', o.created_at, o.created_by || ''])]);
+  downloadCSV('hotelops-orders.csv', [['Property', 'Room', 'Title', 'Priority', 'Status', 'Assigned to', 'Expected return', 'Cost', 'Created', 'Created by'],
+    ...orders.map(o => [propName(o.property_id), roomLabel(o), o.title, o.priority, o.status, o.assigned_to || '', o.expected_return_date || '', o.cost != null && o.cost !== '' ? o.cost : '', o.created_at, o.created_by || ''])]);
 }
 
 /* ---------- MODAL ---------- */
@@ -601,12 +835,20 @@ function bindView() {
     await loadAll();
   });
   const arb = $('add-room-btn'); if (arb) arb.onclick = openAddRoom;
+  const frb = $('fix-rooms-btn'); if (frb) frb.onclick = openFixRooms;
   const rdb = $('report-down-btn'); if (rdb) rdb.onclick = openReportDown;
   const fabr = $('fab-room'); if (fabr) fabr.onclick = openAddRoom;
   const fabo = $('fab-order'); if (fabo) fabo.onclick = openNewOrder;
   const fop = $('f-orderprop'); if (fop) fop.onchange = () => { f.orderProperty = fop.value; render(); };
   document.querySelectorAll('[data-os]').forEach(b => b.onclick = () => { f.orderStatus = b.dataset.os; render(); });
   document.querySelectorAll('[data-move]').forEach(b => b.onclick = () => moveOrder(b.dataset.move, b.dataset.to));
+  document.querySelectorAll('[data-complete]').forEach(b => b.onclick = () => openCompleteOrder(b.dataset.complete));
+  document.querySelectorAll('img[data-photo]').forEach(async img => {
+    const url = await signedPhotoUrl(img.dataset.photo);
+    if (!url) return;
+    img.src = url; img.style.display = '';
+    img.onclick = e => { e.stopPropagation(); openPhotoModal(url); };
+  });
   document.querySelectorAll('.team-row').forEach(r => r.onclick = () => {
     f.orderStatus = 'all'; f.orderProperty = 'all'; switchTab('orders');
     // highlight this person's orders via alert-free approach: filter not implemented per-person, show all
