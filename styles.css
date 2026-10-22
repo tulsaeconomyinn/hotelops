@@ -368,3 +368,21 @@ body {
   .spend-row { border-top-color: #223028; }
   .spend-total { border-top-color: #4ADE80; }
 }
+
+/* V14 — ADMIN: access matrix */
+.access-table { min-width: 660px; }
+.access-table tbody tr { cursor: default; }
+.access-table th.acc-h { max-width: 92px; white-space: normal; }
+.access-table td.acc-cell { text-align: center; vertical-align: middle; }
+.access-table td.acc-cell input[type="checkbox"] { width: 24px; height: 24px; accent-color: #1E5B44; cursor: pointer; }
+.access-table th.acc-person, .access-table td.acc-person { min-width: 170px; }
+.access-table th:first-child, .access-table td:first-child {
+  position: sticky; left: 0; background: #fff; z-index: 1;
+  box-shadow: 1px 0 0 #e5e7eb;
+}
+.access-all { font-size: 12px; font-weight: 700; color: #64748b; white-space: nowrap; }
+@media (prefers-color-scheme: dark) {
+  .access-table th:first-child, .access-table td:first-child { background: #14201B; box-shadow: 1px 0 0 #223028; }
+  .access-all { color: #8FA39B; }
+  #access-saved { color: #4ADE80 !important; }
+}

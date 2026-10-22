@@ -5,6 +5,7 @@ const client = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 let userEmail = '';
 let properties = [], rooms = [], orders = [], historyRows = [];
+let adminProfiles = null, adminLoading = false, adminError = '';
 let currentTab = 'overview';
 let f = { property: 'all', roomStatus: 'all', roomSearch: '', orderStatus: 'open', orderProperty: 'all', histProperty: 'all', histSearch: '' };
 /* Per-user scoping: profile.property_id NULL (or role 'admin') = all-properties admin.
@@ -174,6 +175,7 @@ async function enterApp(email, userId) {
     return;
   }
   profile = prof;
+  const at = $('tab-admin'); if (at) at.style.display = isAdmin() ? '' : 'none';
   if (!isAdmin() && scopedProp()) {
     // Single-hotel login: lock every property filter to their hotel.
     // Multi-hotel logins keep 'all', which means all of THEIR hotels.
@@ -217,6 +219,8 @@ async function loadAll() {
     return;
   }
   properties = p.data; rooms = r.data; orders = o.data; historyRows = h.data;
+  adminProfiles = null;
+  if (currentTab === 'admin' && isAdmin()) loadAdminProfiles();
   const ht = $('header-title');
   if (ht) {
     if (isAdmin()) ht.textContent = '🏨 HotelOps';
@@ -241,6 +245,7 @@ async function logHistory({ property_id, room_id, room_number, event_type, detai
 function switchTab(tab) {
   currentTab = tab;
   document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.tab === tab));
+  if (tab === 'admin' && isAdmin() && !adminProfiles && !adminLoading) loadAdminProfiles();
   render();
 }
 
@@ -250,6 +255,7 @@ function render() {
   else if (currentTab === 'rooms') c.innerHTML = viewRooms();
   else if (currentTab === 'orders') c.innerHTML = viewRooms();
   else if (currentTab === 'team') c.innerHTML = viewTeam();
+  else if (currentTab === 'admin') c.innerHTML = viewAdmin();
   else if (currentTab === 'history') c.innerHTML = viewHistory();
   bindView();
 }
@@ -818,6 +824,132 @@ async function createManagerAccount() {
   }
 }
 
+/* ---------- ADMIN (admin only) ----------
+   Sajan's ask (2026-10-21): an admin section to (1) add new hotels,
+   (2) add users across hotels easily, and (3) an access table — every
+   person × every hotel, check/uncheck to grant or revoke access.
+   No schema change needed: properties insert is admin-only by RLS and
+   profiles update is admin-only by RLS, so this all runs client-side. */
+const shortPropName = p => (String(p.name || '').split('(')[0] || p.name).trim();
+const profileAccessIds = pr => {
+  if (pr && Array.isArray(pr.property_ids) && pr.property_ids.length) return pr.property_ids.slice();
+  return pr && pr.property_id ? [pr.property_id] : [];
+};
+/* Mirrors the DB's is_admin(): role 'admin' OR no primary property.
+   Those accounts see every hotel no matter what, so their row is locked. */
+const isFullAdminProfile = pr => !!pr && (pr.role === 'admin' || !pr.property_id);
+
+async function loadAdminProfiles() {
+  if (adminLoading) return;
+  adminLoading = true; adminError = '';
+  const { data, error } = await client.from('profiles')
+    .select('id, email, name, role, property_id, property_ids').order('email');
+  adminLoading = false;
+  if (error) { adminError = error.message; adminProfiles = []; }
+  else adminProfiles = data || [];
+  if (currentTab === 'admin') render();
+}
+
+function viewAdmin() {
+  if (!isAdmin()) return '<div class="empty">Admins only.</div>';
+  const hotelRows = properties.map(p => {
+    const n = rooms.filter(r => r.property_id === p.id).length;
+    return `<div class="spend-row"><span>${esc(p.name)}<br><small style="color:#64748b">${esc(p.address || '')}</small></span><span style="text-align:right"><strong>${n} rooms</strong><br><button class="btn-secondary btn-small" data-fixrooms="${p.id}" style="margin-top:4px">Room list</button></span></div>`;
+  }).join('');
+  let accessSection;
+  if (adminError) {
+    accessSection = `<div class="error-box">Could not load people: ${esc(adminError)}</div>`;
+  } else if (!adminProfiles) {
+    accessSection = '<div class="loading">Loading people…</div>';
+  } else {
+    const sorted = adminProfiles.slice().sort((a, b) =>
+      (isFullAdminProfile(b) - isFullAdminProfile(a)) || String(a.email).localeCompare(String(b.email)));
+    const head = properties.map(p => `<th class="acc-h" title="${esc(p.name)}">${esc(shortPropName(p))}</th>`).join('');
+    const body = sorted.map(pr => {
+      const ids = profileAccessIds(pr);
+      const full = isFullAdminProfile(pr);
+      const cells = properties.map(p => full
+        ? '<td class="acc-cell"><span class="access-all">All ✓</span></td>'
+        : `<td class="acc-cell"><input type="checkbox" data-acc-user="${pr.id}" data-acc-prop="${p.id}" ${ids.includes(p.id) ? 'checked' : ''} aria-label="${esc(pr.email)} — ${esc(p.name)}"></td>`).join('');
+      return `<tr><td class="acc-person"><div class="team-name">${esc(pr.name || pr.email)}</div><div style="font-size:12px;color:#64748b">${esc(pr.email)} · ${esc(pr.role)}${full ? ' · all hotels' : ''}</div></td>${cells}</tr>`;
+    }).join('');
+    accessSection = `
+      <div class="table-wrap"><table class="rooms-table access-table"><thead><tr><th class="acc-person">Person</th>${head}</tr></thead><tbody>${body}</tbody></table></div>
+      <div id="access-saved" style="font-size:13px;color:#1E5B44;font-weight:600;margin-top:8px;min-height:18px"></div>
+      <p style="font-size:13px;color:#64748b;margin:6px 0 0">Tick or untick to change which hotels a person can see — it saves instantly. Admins always see all hotels. Everyone else needs at least one hotel ticked.</p>`;
+  }
+  return `<div class="section-head"><h2>Admin</h2></div>
+    <div class="card am-card">
+      <h3 style="margin:0 0 6px;font-size:17px;font-weight:800">Add new hotel</h3>
+      <p style="font-size:13px;color:#64748b;margin:0 0 12px">Creates the hotel right away. Add its room numbers next with “Room list” below (or Fix room list in Rooms Status).</p>
+      <label>Hotel name<input id="nh-name" placeholder="e.g. Economy Suites — New Location" autocomplete="off"></label>
+      <label>Address<input id="nh-address" placeholder="e.g. 123 Main St, Tulsa, OK" autocomplete="off"></label>
+      <label>Total rooms (approx is fine)<input id="nh-rooms" type="number" inputmode="numeric" min="0" step="1" placeholder="e.g. 60"></label>
+      <button class="btn-primary" id="nh-create">Add hotel</button>
+      <div id="nh-error" class="error-box hidden" style="margin-top:12px;margin-bottom:0"></div>
+    </div>
+    ${addManagerSection()}
+    <div class="card">
+      <div class="prop-name">🔑 Hotel access</div>
+      ${accessSection}
+    </div>
+    <div class="card">
+      <div class="prop-name">🏨 Hotels (${properties.length})</div>
+      <div class="spend-rows">${hotelRows}</div>
+    </div>`;
+}
+
+async function createHotel() {
+  const name = $('nh-name').value.trim();
+  const address = $('nh-address').value.trim();
+  const total = parseInt($('nh-rooms').value, 10);
+  const errBox = $('nh-error');
+  errBox.classList.add('hidden');
+  if (!name) { errBox.textContent = 'Enter the hotel name.'; errBox.classList.remove('hidden'); return; }
+  const btn = $('nh-create');
+  btn.textContent = 'Adding…'; btn.disabled = true;
+  const { data, error } = await client.from('properties')
+    .insert({ name, address: address || null, total_rooms: isFinite(total) && total > 0 ? total : 0 })
+    .select('id, name').single();
+  btn.textContent = 'Add hotel'; btn.disabled = false;
+  if (error) { errBox.textContent = error.message; errBox.classList.remove('hidden'); return; }
+  await loadAll();
+  openModal(`
+    <h3>Hotel added ✓</h3>
+    <p style="font-size:14px;color:#475569">${esc(data.name)} is created and already shows in Overview and Rooms Status. Next, add its room numbers so rooms can be reported down.</p>
+    <div class="modal-actions">
+      <button class="btn-secondary" onclick="closeModal()">Later</button>
+      <button class="btn-primary" id="nh-fixrooms">Add room list now</button>
+    </div>`);
+  $('nh-fixrooms').onclick = () => openFixRoomsModal(data.id);
+}
+
+async function toggleAccess(cb) {
+  const uid = cb.dataset.accUser, pid = cb.dataset.accProp;
+  const pr = (adminProfiles || []).find(x => x.id === uid);
+  if (!pr) return;
+  let ids = profileAccessIds(pr);
+  if (cb.checked) {
+    if (!ids.includes(pid)) ids.push(pid);
+  } else {
+    if (ids.length <= 1) {
+      alert('They need at least one hotel — unticking their last one would lock them out of the app.');
+      cb.checked = true; return;
+    }
+    ids = ids.filter(x => x !== pid);
+  }
+  // Keep the set in the hotels' display order; property_id = primary = first.
+  ids.sort((a, b) => properties.findIndex(p => p.id === a) - properties.findIndex(p => p.id === b));
+  cb.disabled = true;
+  const { error } = await client.from('profiles')
+    .update({ property_ids: ids, property_id: ids[0] }).eq('id', uid);
+  cb.disabled = false;
+  if (error) { alert(error.message); cb.checked = !cb.checked; return; }
+  pr.property_ids = ids; pr.property_id = ids[0];
+  const saved = $('access-saved');
+  if (saved) saved.textContent = '✓ Saved — ' + (pr.name || pr.email) + ' now has ' + ids.length + ' hotel' + (ids.length === 1 ? '' : 's') + '.';
+}
+
 /* ---------- HISTORY ---------- */
 function viewHistory() {
   const propSel = canPickProp()
@@ -897,6 +1029,9 @@ function bindView() {
     switchTab('rooms');
   });
   const amc = $('am-create'); if (amc) amc.onclick = createManagerAccount;
+  const nhc = $('nh-create'); if (nhc) nhc.onclick = createHotel;
+  document.querySelectorAll('[data-acc-user]').forEach(cb => cb.onchange = () => toggleAccess(cb));
+  document.querySelectorAll('[data-fixrooms]').forEach(b => b.onclick = () => openFixRoomsModal(b.dataset.fixrooms));
   const fhp = $('f-histprop'); if (fhp) fhp.onchange = () => { f.histProperty = fhp.value; render(); };
   const fhs = $('f-histsearch'); if (fhs) fhs.oninput = () => { f.histSearch = fhs.value; render(); if ($('f-histsearch')) { $('f-histsearch').focus(); $('f-histsearch').setSelectionRange(999, 999); } };
   const er = $('exp-rooms'); if (er) er.onclick = exportRooms;
